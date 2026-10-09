@@ -1,0 +1,2355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Midweek">
+<meta name="theme-color" content="#ffffff">
+<title>Midweek Meeting Schedule</title>
+<!--
+  Christian Life and Ministry Meeting Schedule
+  ---------------------------------------------
+  Single self-contained file: HTML + CSS + vanilla JavaScript.
+  No server, no network requests, no tracking. All data lives in this
+  browser's localStorage under the key "clm-schedule-data-v1".
+
+  File map (search for these banners):
+    1. STYLES ............ design tokens, layout, workbook typography, print
+    2. MARKUP ............ app shell (sidebar, top bar, bottom nav, layers)
+    3. SCRIPT
+       3.1 constants & icons
+       3.2 utilities (escaping, dates)
+       3.3 data: defaults, sample data, validation, storage
+       3.4 queries: assignments, warnings, history
+       3.5 shared renderers (workbook-style program)
+       3.6 views: home, schedule (week/month/list/publisher), publishers,
+           planner, settings
+       3.7 meeting editor, publisher editor
+       3.8 print, copy, share, CSV/JSON export & import
+       3.9 event wiring & startup
+-->
+<style>
+/* =====================================================================
+   1. STYLES
+   ===================================================================== */
+
+/* ---- Design tokens (taken from the workbook screenshots) ---- */
+:root{
+  --font:"Noto Sans","Noto Sans UI","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --bg:#ffffff;
+  --surface:#ffffff;
+  --band:#f0f0f0;          /* gray week band */
+  --text:#262626;
+  --muted:#6b6b6b;
+  --line:#e1e1e1;
+  --input:#b9b9b9;          /* thin gray input border */
+  --link:#4f6aa5;           /* blue for songs, readings, references */
+  --treasures:#3d6c77;  --treasures-bg:#4f818b;
+  --ministry:#936b1f;   --ministry-bg:#c9922e;
+  --living:#8d2d2a;     --living-bg:#b23f2c;
+  --ok:#2e7a4c; --ok-bg:#e5f2ea;
+  --info:#3a5a99; --info-bg:#e7ecf7;
+  --warn:#94600a; --warn-bg:#fbf0dc;
+  --danger:#a8261d; --danger-bg:#fbe7e5;
+  --radius:6px;
+  --nav-h:60px;
+  color-scheme:light;
+}
+[data-theme="dark"]{
+  --bg:#17191c; --surface:#1f2226; --band:#2a2e33; --text:#ebebeb; --muted:#a4a7ab;
+  --line:#33383e; --input:#4b5159; --link:#93aee6;
+  --treasures:#86bac6; --ministry:#e1b462; --living:#e78f84;
+  --ok:#7fd1a0; --ok-bg:#1f3529; --info:#a9bff0; --info-bg:#232d42;
+  --warn:#f0c26e; --warn-bg:#3a2f1a; --danger:#ff9b91; --danger-bg:#3d2220;
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);font-size:16px;line-height:1.5}
+body.modal-open{overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:var(--link)}
+:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+.muted{color:var(--muted)}
+.hidden{display:none!important}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* ---- App shell: bottom nav on phones, sidebar on wide screens ---- */
+.sidebar{display:none}
+main{min-height:100vh;padding-bottom:calc(var(--nav-h) + 24px + env(safe-area-inset-bottom,0px))}
+.topbar{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top,0px) + 8px) 16px 8px;display:flex;align-items:center;gap:12px;min-height:56px}
+.topbar h1{font-size:17px;margin:0;font-weight:700;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.logo{width:34px;height:34px;flex:0 0 34px;border-radius:var(--radius);background:var(--treasures-bg);color:#fff;
+  display:grid;place-items:center;font-weight:700;font-size:13px;overflow:hidden}
+.logo img{width:100%;height:100%;object-fit:cover}
+.bottomnav{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(6,1fr);
+  background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+.navbtn{background:none;border:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  min-height:var(--nav-h);font-size:11px;font-weight:600;color:var(--muted);cursor:pointer;padding:6px 2px}
+.navbtn svg{width:24px;height:24px}
+.navbtn.active{color:var(--treasures)}
+@media (min-width:900px){
+  .sidebar{display:flex;flex-direction:column;gap:4px;position:fixed;inset:0 auto 0 0;width:236px;
+    border-right:1px solid var(--line);background:var(--surface);padding:20px 14px;z-index:25}
+  .sidebar .brand{padding:0 6px 18px;border-bottom:1px solid var(--line);margin-bottom:10px}
+  .sidebar .brand b{font-size:15px;line-height:1.25}
+  .sidebar .navbtn{flex-direction:row;justify-content:flex-start;gap:12px;font-size:15px;min-height:44px;
+    padding:8px 12px;border-radius:var(--radius);color:var(--text)}
+  .sidebar .navbtn.active{background:var(--band);color:var(--treasures)}
+  .sidebar .navbtn svg{width:20px;height:20px}
+  .sidebar .side-foot{margin-top:auto;font-size:12px;color:var(--muted);padding:0 6px}
+  main{margin-left:236px;padding-bottom:48px}
+  .bottomnav{display:none}
+  .topbar .brand{display:none}
+}
+
+.wrap{max-width:860px;margin:0 auto;padding:0 18px}
+@media (min-width:600px){.wrap{padding:0 28px}}
+.stack>*+*{margin-top:16px}
+
+/* ---- Buttons & forms ---- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:42px;padding:8px 14px;
+  border:1px solid var(--input);background:var(--surface);color:var(--text);border-radius:var(--radius);
+  font-size:15px;font-weight:600;cursor:pointer;text-decoration:none;white-space:nowrap;line-height:1.2}
+.btn svg{width:18px;height:18px;flex:0 0 auto}
+.btn:hover{background:var(--band)}
+.btn.primary{background:var(--treasures-bg);border-color:var(--treasures-bg);color:#fff}
+.btn.primary:hover{filter:brightness(.94)}
+.btn.danger{color:var(--danger);border-color:var(--danger)}
+.btn.danger.solid{background:var(--danger);color:#fff}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover{background:var(--band)}
+.btn.sm{min-height:34px;padding:4px 10px;font-size:14px}
+.btn.icon{padding:0;width:42px}
+.btn.icon.sm{width:34px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btnrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field>span{font-size:13px;font-weight:600;color:var(--muted)}
+.input,select.input,textarea.input{width:100%;min-height:44px;padding:9px 11px;border:1px solid var(--input);
+  border-radius:var(--radius);background:var(--surface);font-size:16px;line-height:1.3}
+textarea.input{min-height:70px;resize:vertical}
+select.input{appearance:none;-webkit-appearance:none;padding-right:32px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 11px center;background-size:12px}
+.grid2{display:grid;grid-template-columns:1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3.songs{grid-template-columns:repeat(3,1fr)}
+.grid3.roles{grid-template-columns:1fr}
+@media (min-width:600px){.grid2{grid-template-columns:1fr 1fr}.grid3,.grid3.roles{grid-template-columns:repeat(3,1fr)}}
+.check{display:flex;align-items:center;gap:10px;min-height:40px;cursor:pointer}
+.check input{width:20px;height:20px;accent-color:var(--treasures-bg)}
+.seg{display:flex;border:1px solid var(--input);border-radius:var(--radius);overflow:hidden;width:100%}
+.seg button{flex:1;border:0;background:var(--surface);padding:9px 6px;font-size:14px;font-weight:600;cursor:pointer;min-height:40px}
+.seg button+button{border-left:1px solid var(--input)}
+.seg button.on{background:var(--treasures-bg);color:#fff}
+@media (min-width:600px){.seg{width:auto}.seg button{padding:8px 18px}}
+
+/* ---- Workbook typography (mirrors the reference images) ---- */
+.band{background:var(--band);padding:14px 0 12px}
+.band .kicker{font-size:14px;color:var(--muted);margin:0 0 2px}
+.band h2{margin:0;font-size:clamp(26px,6vw,36px);font-weight:700;line-height:1.15;letter-spacing:-.01em}
+.reading{color:var(--link);font-weight:700;text-transform:uppercase;font-size:clamp(18px,3.6vw,22px);margin:16px 0 4px;letter-spacing:.01em}
+.songline{font-weight:700;margin:14px 0 4px;font-size:1.05em}
+.song{color:var(--link)}
+.dur{font-weight:400}
+.sep{font-weight:700;margin:0 2px}
+.byline{margin:0 0 8px;color:var(--muted);font-size:15px}
+.byline b{color:var(--text);font-weight:600}
+.sec-head{display:flex;align-items:center;gap:12px;margin:28px 0 14px;font-size:clamp(20px,4.4vw,28px);
+  font-weight:700;text-transform:uppercase;line-height:1.15}
+.sec-ico{flex:0 0 auto;width:1.4em;height:1.4em;display:grid;place-items:center}
+.sec-ico svg{width:72%;height:72%}
+.s-treasures{color:var(--treasures)} .s-treasures .sec-ico{background:var(--treasures-bg)}
+.s-ministry{color:var(--ministry)}   .s-ministry .sec-ico{background:var(--ministry-bg)}
+.s-living{color:var(--living)}       .s-living .sec-ico{background:var(--living-bg)}
+.part{margin:0 0 18px}
+.ptitle{font-weight:700;font-size:1.08em;line-height:1.3}
+.pbody{padding-left:1.6em;margin-top:2px;color:var(--text)}
+.ptype{color:var(--muted);font-size:14px}
+.who{margin-top:3px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+.who b{font-weight:600}
+.hall{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 6px;min-width:86px;text-align:center}
+.hall.h2{color:var(--ministry);border-color:var(--ministry-bg)}
+.pnote{color:var(--muted);font-size:14px;margin-top:2px}
+.remark{margin:12px 0;font-size:1.02em}
+.remark b{font-weight:700}
+.unassigned{color:var(--danger);font-weight:600}
+.nn{color:var(--muted);font-style:italic;font-weight:400;opacity:.7}
+.p-doc .nn{visibility:hidden}
+.empty-sec{color:var(--muted);font-style:italic;margin:0 0 12px 1.6em}
+
+/* ---- Chips, notices, misc blocks ---- */
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;padding:2px 9px;border-radius:999px;
+  border:1px solid var(--input);color:var(--muted);background:transparent;line-height:1.6;white-space:nowrap}
+button.chip{cursor:pointer;min-height:26px}
+.chip.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.chip.warn{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.chip.cat{font-weight:600;border-color:var(--line)}
+.notice{border-left:4px solid var(--warn);background:var(--warn-bg);padding:10px 14px;border-radius:0 var(--radius) var(--radius) 0;font-size:15px}
+.notice.conflict{border-color:var(--danger);background:var(--danger-bg)}
+.notice.info{border-color:var(--info);background:var(--info-bg)}
+.notice.ok{border-color:var(--ok);background:var(--ok-bg)}
+.notice ul{margin:6px 0 0;padding-left:18px}
+.notice li{margin-bottom:6px}
+.jumps{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.btn.jump{min-height:30px;padding:2px 10px;font-size:13px;background:var(--surface)}
+.btn.jump svg{width:14px;height:14px}
+@keyframes flash{0%,60%{box-shadow:0 0 0 3px var(--ministry-bg);border-radius:6px}100%{box-shadow:0 0 0 3px transparent}}
+.flash{animation:flash 2.2s ease-out}
+@media (prefers-reduced-motion:reduce){.flash{animation:none;box-shadow:0 0 0 3px var(--ministry-bg)}}
+.notice p{margin:0}
+.kv{display:grid;grid-template-columns:1fr;gap:0;border-top:1px solid var(--line);margin:14px 0}
+.kv>div{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.kv dt{color:var(--muted);font-size:14px;margin:0}
+.kv dd{margin:0;font-weight:600;text-align:right}
+@media (min-width:600px){.kv{grid-template-columns:1fr 1fr;column-gap:32px}}
+.panel{border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+.panel h3{margin:0 0 10px;font-size:17px}
+.subhead{font-size:20px;font-weight:700;margin:32px 0 10px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin:14px 0}
+.weeknav{display:flex;align-items:center;gap:6px}
+.empty{text-align:center;padding:40px 16px;color:var(--muted)}
+.empty h3{color:var(--text);margin:0 0 6px;font-size:19px}
+.empty .btnrow{justify-content:center;margin-top:16px}
+.banner{background:var(--danger-bg);color:var(--danger);padding:10px 18px;font-size:14px;font-weight:600}
+.progress{height:6px;background:var(--band);border-radius:3px;overflow:hidden;margin-top:6px}
+.progress i{display:block;height:100%;background:var(--ok)}
+
+/* ---- Lists (meetings, publishers, assignments) ---- */
+.rows{border-top:1px solid var(--line)}
+.row{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+.row .main{flex:1;min-width:0}
+.row .title{font-weight:700}
+.row .sub{color:var(--muted);font-size:14px}
+.row .acts{display:flex;gap:4px;flex:0 0 auto}
+.datebox{flex:0 0 52px;text-align:center;border:1px solid var(--line);border-radius:var(--radius);padding:4px 0;line-height:1.15}
+.datebox b{display:block;font-size:20px}
+.datebox span{font-size:11px;color:var(--muted);font-weight:700}
+.cats{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th,.tbl td{text-align:left;padding:8px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl th{color:var(--muted);font-weight:600;font-size:13px}
+.scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+/* ---- Publisher views ---- */
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.pubcard{position:relative;border:1px solid var(--line);border-top:4px solid var(--treasures-bg);border-radius:var(--radius);background:var(--surface);display:flex;flex-direction:column}
+.pubcard.sis{border-top-color:var(--ministry-bg)}
+.pc-main{background:none;border:0;text-align:left;padding:12px 12px 6px;cursor:pointer;flex:1}
+.pc-name{font-weight:700;font-size:16px;padding-right:64px}
+.pubcard .sub{color:var(--muted);font-size:14px}
+.pc-stats{display:flex;gap:14px;font-size:13px;color:var(--muted);margin:6px 0 2px}
+.pc-stats b{color:var(--text)}
+.pubcard .acts{position:absolute;top:6px;right:6px}
+.pubcard .cats .chip{font-size:11px}
+.pubtbl td{vertical-align:middle}
+.pubtbl .elig{font-size:13px;color:var(--muted);min-width:220px;max-width:420px}
+.pubtbl .acts{display:flex;gap:2px;justify-content:flex-end}
+.linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--text);cursor:pointer;text-align:left}
+.linkbtn:hover{color:var(--link);text-decoration:underline}
+
+/* ---- Month calendar ---- */
+.cal{display:grid;grid-template-columns:repeat(7,1fr);border-top:1px solid var(--line);border-left:1px solid var(--line)}
+.cal .dow{font-size:12px;font-weight:700;color:var(--muted);text-align:center;padding:6px 0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--band)}
+.cal .day{min-height:64px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:4px;font-size:13px;
+  background:var(--surface);text-align:left;cursor:default;display:flex;flex-direction:column;gap:3px;border-top:0;border-left:0}
+.cal .day.out{color:var(--muted);background:var(--bg);opacity:.6}
+.cal .day.today .dn{background:var(--text);color:var(--bg);border-radius:999px;padding:0 6px}
+.cal .day.has{cursor:pointer}
+.cal .day.has:hover,.cal .day.add:hover{background:var(--band)}
+.cal .day.add{cursor:pointer}
+.cal .dn{font-weight:700;align-self:flex-start}
+.cal .mt{font-size:11px;font-weight:700;border-radius:4px;padding:2px 4px;line-height:1.2;color:#fff;background:var(--ok)}
+.cal .mt.partial{background:var(--ministry-bg)}
+.cal .plus{font-size:11px;color:var(--muted)}
+@media (min-width:700px){.cal .day{min-height:88px}}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-top:10px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+/* ---- Modals / sheets ---- */
+#modalRoot .layer{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.42);display:flex;align-items:flex-end;justify-content:center}
+.modal{background:var(--surface);width:100%;max-width:780px;max-height:94vh;display:flex;flex-direction:column;
+  border-radius:12px 12px 0 0;overflow:hidden}
+.modal.full{height:100%;max-height:100%;border-radius:0}
+.modal.dialog{max-width:460px}
+.modal-head{display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top,0px) + 8px) 12px 8px;border-bottom:1px solid var(--line);background:var(--surface)}
+.modal.dialog .modal-head,.modal:not(.full) .modal-head{padding-top:10px}
+.modal-head h2{flex:1;margin:0;font-size:17px;text-align:center}
+.modal-body{overflow:auto;-webkit-overflow-scrolling:touch;padding:16px 18px 28px;flex:1}
+.modal-foot{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line)}
+.modal-body h3{margin:0 0 8px;font-size:18px}
+.dmsg p{margin:0 0 8px}
+@media (min-width:700px){
+  #modalRoot .layer{align-items:center;padding:24px}
+  .modal{border-radius:10px}
+  .modal.full{height:auto;max-height:92vh;border-radius:10px}
+  .modal-head{padding-top:10px}
+}
+
+/* ---- Meeting editor parts ---- */
+.ed-sec{margin-top:26px}
+.ed-sec .sec-head{margin:0 0 12px;font-size:19px}
+.pcard{color:var(--text);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:var(--radius);padding:12px;margin-bottom:10px;background:var(--surface)}
+.pcard.s-treasures{border-left-color:var(--treasures-bg)}
+.pcard.s-ministry{border-left-color:var(--ministry-bg)}
+.pcard.s-living{border-left-color:var(--living-bg)}
+.pcard .phead{display:flex;gap:6px;align-items:center;margin-bottom:10px}
+.pcard .phead .input{font-weight:700}
+.pcard .num{font-weight:700;min-width:22px}
+.fixedtitle{flex:1;min-width:0;font-weight:700;padding:9px 0}
+.pcard.off{opacity:.75;background:var(--band)}
+.switch{position:relative;display:inline-block;width:50px;height:30px;flex:0 0 auto;cursor:pointer}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.switch span{position:absolute;inset:0;background:var(--input);border-radius:999px;transition:background .15s}
+.switch span::after{content:'';position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .15s}
+.switch input:checked+span{background:var(--ok)}
+.switch input:checked+span::after{transform:translateX(20px)}
+.switch input:focus-visible+span{outline:2px solid var(--link);outline-offset:2px}
+.pcard.fixed{background:var(--band);border-left-color:var(--input);padding:10px 12px}
+.fixedval{min-height:44px;display:flex;align-items:center;font-weight:600;color:var(--muted)}
+.pcard.s-treasures .num{color:var(--treasures)}.pcard.s-ministry .num{color:var(--ministry)}.pcard.s-living .num{color:var(--living)}
+.pcols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.pcols .lcol,.pcols .rcol{display:flex;flex-direction:column;gap:10px;min-width:0}
+.pcols .rcol{border-left:1px solid var(--line);padding-left:12px}
+.hallgrp{display:flex;flex-direction:column;gap:8px}
+.hallgrp.second{border-top:1.5px solid var(--input);padding-top:10px}
+.hall-t{font-size:14px;font-weight:700}
+.hallgrp.main .hall-t{color:var(--treasures)}
+.hallgrp.second .hall-t{color:var(--ministry)}
+textarea.input.details{min-height:96px}
+.prow .names .hh{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--treasures);margin-bottom:1px}
+.prow .names .hh.h2{color:var(--ministry)}
+.hall2-panel.on{border-color:var(--ministry-bg);background:var(--warn-bg)}
+@media (max-width:340px){.pcols{grid-template-columns:1fr}.pcols .rcol{border-left:0;padding-left:0}}
+.prow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,40%);gap:2px 14px;align-items:start}
+.prog{max-width:720px}
+.prow .names{display:flex;flex-direction:column;align-items:flex-start;text-align:left;gap:1px;font-size:15px;color:var(--text);padding-top:2px}
+.prow .names .lbl{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.2}
+.prow .names b{font-weight:600}
+.prow .names .hall{margin-top:2px;margin-bottom:2px}
+.srow{margin:14px 0 6px}.srow .songline{margin:0}
+@media (min-width:700px){.prow{grid-template-columns:minmax(0,1fr) 230px;column-gap:28px}}
+/* Second hall: phones show the part on top, then Main | Second hall side by side;
+   wider screens use three columns (part | main hall | second hall). */
+.prow.h2row{grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);column-gap:28px;row-gap:4px}
+.prow.h2row>:first-child{grid-column:1/-1}
+/* One divider line between the Main hall and Second hall columns.
+   Spacing between parts sits inside the cells (not as margins), so on
+   wider screens and in print the line runs unbroken through the section. */
+.part.h2row{margin-bottom:0;align-items:stretch}
+.part.h2row>*{padding-bottom:18px}
+.part.h2row>:first-child{padding-bottom:4px}
+.prow.h2row>.names:nth-child(3){border-left:1.5px solid var(--input);padding-left:6px;margin-left:0}
+.prow.h2row>.names:nth-child(2){margin-left:1.6em}
+/* Main hall names hug the divider line (right-aligned), second hall starts
+   just after it — equal space on both sides, more room for the part details. */
+.prow.h2row>.names:nth-child(2),.prow.h2row>.names:nth-child(3){align-items:flex-end;text-align:right}
+@media (min-width:600px){
+  .twohall .prow,.twohall .prow.h2row{grid-template-columns:minmax(0,1fr) 175px 135px;column-gap:36px}
+  .prog.twohall{max-width:740px}
+  /* single-hall names in a two-hall meeting line up with the main hall column */
+  .twohall .prow:not(.h2row)>.names{align-items:flex-end;text-align:right}
+  .prow.h2row>:first-child{grid-column:auto}
+  .prow.h2row>.names:nth-child(2){margin-left:0}
+  .part.h2row>:first-child{padding-bottom:18px}
+  .prow.h2row>.names:nth-child(3){margin-left:0;padding-left:6px}
+}
+.pcard .input{color:var(--text)}
+.pcard .field>span{color:var(--muted)}
+.tplrow{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 0;border-bottom:1px solid var(--line)}
+.tplrow .wide{grid-column:1/-1}
+@media (min-width:700px){.tplrow{grid-template-columns:1.1fr 2fr 1.4fr 1.1fr .7fr auto}.tplrow .wide{grid-column:auto}}
+
+/* ---- Toast ---- */
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--nav-h) + 16px + env(safe-area-inset-bottom,0px));
+  z-index:200;background:#2b2b2b;color:#fff;padding:10px 16px;border-radius:var(--radius);font-size:15px;font-weight:600;
+  max-width:calc(100% - 32px);opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.show{opacity:1}
+#toast.error{background:var(--danger)}
+@media (min-width:900px){#toast{bottom:28px;left:calc(50% + 118px)}}
+@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+
+/* ---- Assignments page & S-89 slips ---- */
+.slip-row .slipchk{width:22px;height:22px;flex:0 0 auto;accent-color:var(--treasures-bg)}
+.hallchip{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--treasures);margin-right:6px}
+.hallchip.h2{color:var(--ministry)}
+.slip{font-family:"Helvetica Neue",Arial,var(--font);color:#111;background:#fff;box-sizing:border-box;display:flex;flex-direction:column}
+.slip h1{font-size:15pt;font-weight:800;text-transform:uppercase;text-align:center;line-height:1.15;margin:0 0 10pt}
+.sl-f{display:flex;align-items:flex-end;gap:5pt;margin:0 0 9pt;font-size:12.5pt}
+.sl-f b{white-space:nowrap;font-weight:800}
+.sl-f span{flex:1;border-bottom:1pt dotted #555;min-height:1.3em;font-size:12pt;padding:0 0 1pt 4pt}
+.sl-part{align-items:flex-start}
+.sl-part b{padding-top:1pt}
+.sl-part span{text-align:left;line-height:1.3}
+.slips .sl-part span{font-size:10.5pt}
+.sl-given{margin-top:10pt;font-size:12.5pt}
+.sl-given b{display:block;font-weight:800;margin-bottom:4pt}
+.sl-given div{display:flex;align-items:center;gap:8pt;margin:0 0 3pt 14pt}
+.sl-box{display:inline-flex;align-items:center;justify-content:center;width:11pt;height:11pt;border:1pt solid #444;font-size:10pt;line-height:1;font-weight:800}
+.sl-note{font-size:10pt;line-height:1.3;margin:14pt 0 0;text-align:justify}
+.sl-note b{font-weight:800}
+.sl-code{font-size:8.5pt;margin-top:auto;padding-top:8pt}
+.slip{position:relative}
+.slip.copy h1{margin-top:4mm}
+.slips .slip.copy h1{margin-top:3mm}
+.sl-copy{position:absolute;top:2.5mm;right:3mm;font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#555;border:.75pt solid #777;border-radius:2pt;padding:0 4pt}
+.slip-preview .slip{border:1px solid var(--line);padding:18px;border-radius:4px}
+/* print: 4 slips per A4 page (2 x 2) with light cut lines */
+.slips{display:grid;grid-template-columns:1fr 1fr}
+.slips .slip{height:133mm;padding:7mm 7mm 5mm;border:.5pt dashed #bbb;break-inside:avoid;page-break-inside:avoid;overflow:hidden}
+.slips .slip h1{font-size:13pt}
+.slips .sl-f,.slips .sl-given{font-size:11.5pt}
+.slips .sl-note{font-size:9pt}
+
+/* ---- Print (A4) ---- */
+#printArea{display:none}
+@page{size:A4;margin:14mm 14mm 16mm}
+@media print{
+  body.printing #app, body.printing #modalRoot, body.printing #toast{display:none!important}
+  body.printing #printArea{display:block!important}
+  html,body{background:#fff!important;color:#000!important;color-scheme:light!important}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+/* Print uses the SAME workbook-style program as the app (renderProgram),
+   just sized for A4 and always in light colors. */
+.p-doc{font-family:var(--font);font-size:10pt;line-height:1.35;color:#262626;background:#fff;
+  --text:#262626;--muted:#666;--line:#dedede;--band:#f0f0f0;--link:#4f6aa5;--danger:#a8261d;
+  --treasures:#3d6c77;--treasures-bg:#4f818b;--ministry:#936b1f;--ministry-bg:#c9922e;--living:#8d2d2a;--living-bg:#b23f2c}
+.p-top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #222;padding-bottom:4pt;margin-bottom:10pt}
+.p-cong{font-size:15pt;font-weight:700}
+.p-title{font-size:9.5pt;color:#555}
+.p-meet{margin-bottom:16pt;break-inside:avoid;page-break-inside:avoid}
+.p-meet+.p-meet{padding-top:4pt}
+.p-band{background:#f0f0f0;padding:5pt 10pt;display:flex;justify-content:space-between;align-items:baseline;gap:12pt;flex-wrap:wrap}
+.p-band>b{font-size:17pt;white-space:nowrap}
+.p-band span{font-size:9pt;color:#333}
+.p-doc .prog{max-width:none}
+.p-doc .reading{font-size:10.5pt;margin:7pt 0 2pt}
+.p-doc .srow{margin:6pt 0 3pt}
+.p-doc .songline{font-size:10pt}
+.p-doc .sec-head{font-size:12.5pt;margin:11pt 0 5pt;gap:7pt;break-after:avoid;page-break-after:avoid}
+.p-doc .part{margin:0 0 6pt;break-inside:avoid;page-break-inside:avoid}
+.p-doc .ptitle{font-size:10.5pt}
+.p-doc .pbody{font-size:9.5pt;padding-left:1.4em}
+.p-doc .pnote{font-size:8.5pt}
+.p-doc .remark{margin:5pt 0}
+.p-doc .empty-sec{font-size:9pt;margin-bottom:6pt}
+.p-doc .prow,.p-doc .twohall .prow{grid-template-columns:minmax(0,1fr) 150pt;column-gap:16pt}
+.p-doc .twohall .prow,.p-doc .twohall .prow.h2row{grid-template-columns:minmax(0,1fr) 120pt 92pt;column-gap:18pt}
+.p-doc .prow.h2row>:first-child{grid-column:auto}
+.p-doc .prow.h2row>.names:nth-child(2){margin-left:0}
+.p-doc .part.h2row{margin-bottom:0}
+.p-doc .part.h2row>*,.p-doc .part.h2row>:first-child{padding-bottom:6pt}
+.p-doc .prow.h2row>.names:nth-child(3){border-left:1pt solid #b9b9b9;margin-left:0;padding-left:4pt}
+.p-doc .twohall .prow>.names:nth-child(2),.p-doc .twohall .prow.h2row>.names:nth-child(3){align-items:flex-end;text-align:right}
+.p-doc .prow .names{font-size:9.5pt}
+.p-doc .prow .names .lbl{font-size:7.5pt}
+.p-doc .prow .names .hh{font-size:7.5pt}
+.p-note{font-size:8.5pt;color:#444;font-style:italic;margin-top:4pt}
+.p-foot{font-size:8pt;color:#777;margin-top:10pt;text-align:right}
+</style>
+</head>
+<body>
+<!-- =====================================================================
+     2. MARKUP — app shell. Views are rendered into #view by JavaScript.
+     ===================================================================== -->
+<div id="app">
+  <aside class="sidebar" aria-label="Main navigation">
+    <div class="brand" id="sideBrand"></div>
+    <div id="sideNav"></div>
+    <div class="side-foot" id="sideFoot"></div>
+  </aside>
+  <main>
+    <div id="banner"></div>
+    <header class="topbar">
+      <div class="brand" id="topBrand"></div>
+      <h1 id="topTitle"></h1>
+      <button class="btn primary sm" data-action="addMeeting" aria-label="Add meeting" id="topAdd"></button>
+    </header>
+    <div id="view"></div>
+  </main>
+  <nav class="bottomnav" id="bottomNav" aria-label="Main navigation"></nav>
+</div>
+<div id="modalRoot"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<div id="printArea"></div>
+<input type="file" id="importFile" accept="application/json,.json" class="hidden">
+<input type="file" id="logoFile" accept="image/*" class="hidden">
+
+<script>
+'use strict';
+/* =====================================================================
+   3.1 CONSTANTS & ICONS
+   ===================================================================== */
+const APP_ID = 'clm-schedule';
+const STORE_KEY = 'clm-schedule-data-v1';     // main data
+const PREV_KEY = 'clm-schedule-before-change'; // safety copy before import/reset
+
+/* Settings for Apply Yourself to the Field Ministry parts (stored in part.format). */
+/* Program wording is in Bisaya (Cebuano), as in the workbook. */
+const MINISTRY_SETTINGS = ['Pagpamalaybalay', 'Impormal nga Pagsangyaw', 'Publiko nga Pagsangyaw', 'Pasundayag', 'Pakigpulong'];
+const FORMATS = [...MINISTRY_SETTINGS, 'Pakighisgot', 'Pagbasa', 'Video', 'Interview', 'Other'];
+const MONTHS = ['Enero','Pebrero','Marso','Abril','Mayo','Hunyo','Hulyo','Agosto','Septiyembre','Oktubre','Nobyembre','Disyembre'];   // Bisaya
+const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+/* Category ids the app logic depends on (can be renamed, not deleted). */
+const CORE_CATS = ['chairman','prayer','assistant','cbs','cbsreader','counselor'];
+const DEFAULT_CATEGORIES = [
+  {id:'chairman',  name:'Chairman'},
+  {id:'prayer',    name:'Pag-ampo'},
+  {id:'treasures', name:'Bahandi Gikan sa Pulong sa Diyos (Pakigpulong)'},
+  {id:'gems',      name:'Espirituwal nga mga Bahandi'},
+  {id:'reading',   name:'Pagbasa sa Bibliya'},
+  {id:'starting',  name:'Dihang Magsugod ug Panag-estorya'},
+  {id:'following', name:'Dihang Makig-estorya Pag-usab'},
+  {id:'disciples', name:'Dihang Maghimog Tinun-an'},
+  {id:'beliefs',   name:'Pagpatin-aw sa Imong Tinuohan'},
+  {id:'studenttalk', name:'Student Talk'},
+  {id:'assistant', name:'Student Assistant'},
+  {id:'living',    name:'Kristohanong Pagkinabuhi (Bahin)'},
+  {id:'localneeds',name:'Lokal nga mga Panginahanglan'},
+  {id:'cbs',       name:'Pagtuon sa Kongregasyon sa Bibliya (Konduktor)'},
+  {id:'cbsreader', name:'Pagtuon sa Kongregasyon sa Bibliya (Reader)'},
+  {id:'counselor', name:'Second Hall Counselor'}
+];
+
+/* Inline SVG icons. Section icons mirror the workbook (gem, wheat, sheep). */
+const ICON = {
+  gem:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"><path d="M6.5 4h11L21 9l-9 11L3 9z"/><path d="M3 9h18M9.5 4 8 9l4 11 4-11-1.5-5M8 9l4-5 4 5"/></svg>',
+  wheat:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22V5"/><path d="M12 8.5c-2-.5-3-2-3-4 2 .5 3 2 3 4zm0 0c2-.5 3-2 3-4-2 .5-3 2-3 4zm0 4.5c-2-.5-3-2-3-4 2 .5 3 2 3 4zm0 0c2-.5 3-2 3-4-2 .5-3 2-3 4zm0 4.5c-2-.5-3-2-3-4 2 .5 3 2 3 4zm0 0c2-.5 3-2 3-4-2 .5-3 2-3 4z"/></svg>',
+  sheep:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9.5c.2-1.8 2-2.8 3.5-2.1.8-1.4 3.2-1.4 4 .1 1.7-.3 3 1.2 2.6 2.8 1.3.8.9 3.2-.9 3.4H9c-1.7-.2-2.3-2.6-1-4.2z"/><path d="M8.2 9.6C7 8.8 4.6 9 4 10.6c-.4 1.2.6 2.4 2 2.2l2-.3"/><path d="M10 13.7V18M12.5 13.7V18M15 13.7V18M17.3 13.6V18"/></svg>',
+  home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>',
+  cal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+  users:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.8a3.3 3.3 0 0 1 0 6.4M18 14.8c2 .7 3.2 2.4 3.5 5.2"/></svg>',
+  slip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h12v18H6z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>',
+  plan:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2.8h6V4M9 10h6M9 14h6M9 18h3"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>',
+  copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+  trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  print:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M7 9V3h10v6M7 17H4v-7a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v7h-3"/><rect x="7" y="14" width="10" height="7"/></svg>',
+  share:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4M5 12v8h14v-8"/></svg>',
+  text:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 10h14M5 14h9M5 18h6"/></svg>',
+  up:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  left:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>',
+  right:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+  download:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 11l4 4 4-4M5 19h14"/></svg>',
+  upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M8 7l4-4 4 4M5 19h14"/></svg>'
+};
+
+const SECTIONS = [
+  {id:'treasures', name:'Bahandi Gikan sa Pulong sa Diyos', icon:ICON.gem},
+  {id:'ministry',  name:'Magmaepektibo sa Ministeryo', icon:ICON.wheat},
+  {id:'living',    name:'Kristohanong Pagkinabuhi', icon:ICON.sheep}
+];
+const SECTION_IDS = SECTIONS.map(s => s.id);
+
+const TABS = [
+  {id:'home', label:'Home', icon:ICON.home, title:'Home'},
+  {id:'schedule', label:'Schedule', icon:ICON.cal, title:'Meeting schedule'},
+  {id:'slips', label:'Assignments', short:'Slips', icon:ICON.slip, title:'Assignments & slips'},
+  {id:'publishers', label:'Publishers', icon:ICON.users, title:'Publishers'},
+  {id:'planner', label:'Planner', icon:ICON.plan, title:'Assignment planner'},
+  {id:'settings', label:'Settings', icon:ICON.gear, title:'Settings'}
+];
+
+/* =====================================================================
+   3.2 UTILITIES
+   ===================================================================== */
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
+const clone = o => JSON.parse(JSON.stringify(o));
+const pad = n => String(n).padStart(2, '0');
+
+/* Dates are stored as 'YYYY-MM-DD' strings and parsed as LOCAL dates
+   (never UTC) so a meeting never shifts by a day in other time zones. */
+const toISO = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+function parseISO(s){
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
+  if (!m) return null;
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return (d.getMonth() === +m[2] - 1 && +m[1] > 1900 && +m[1] < 2200) ? d : null;
+}
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const todayISO = () => toISO(new Date());
+function weekStartOf(d, ws){
+  if (ws === undefined) ws = state.settings.weekStart;
+  const diff = (d.getDay() - ws + 7) % 7;
+  return addDays(new Date(d.getFullYear(), d.getMonth(), d.getDate()), -diff);
+}
+function fmtRange(start){
+  const end = addDays(start, 6);
+  if (start.getMonth() === end.getMonth()) return `${MONTHS[start.getMonth()]} ${start.getDate()}–${end.getDate()}`;
+  return `${MONTHS[start.getMonth()].slice(0,3)} ${start.getDate()} – ${MONTHS[end.getMonth()].slice(0,3)} ${end.getDate()}`;
+}
+const fmtLong = iso => { const d = parseISO(iso); return d ? `${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}` : ''; };
+const fmtShort = iso => { const d = parseISO(iso); return d ? `${MONTHS[d.getMonth()].slice(0,3)} ${d.getDate()}, ${d.getFullYear()}` : ''; };
+const fmtMD = iso => { const d = parseISO(iso); return d ? `${MONTHS[d.getMonth()].slice(0,3)} ${d.getDate()}` : ''; };
+function fmtTime(t){
+  const m = /^(\d{2}):(\d{2})$/.exec(t || ''); if (!m) return '';
+  let h = +m[1]; const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
+  return `${h}:${m[2]} ${ap}`;
+}
+function daysUntil(iso){ const d = parseISO(iso); const t = parseISO(todayISO()); return Math.round((d - t) / 864e5); }
+const weekLabel = m => m.weekLabel || fmtRange(weekStartOf(parseISO(m.date)));
+
+/* Small sanitizers used by validation */
+const str = (v, max = 200) => typeof v === 'string' ? v.trim().slice(0, max) : (typeof v === 'number' ? String(v) : '');
+function int(v, min, max, dflt){ const n = parseInt(v, 10); return Number.isFinite(n) && n >= min && n <= max ? n : dflt; }
+function songVal(v){ const n = parseInt(v, 10); return n > 0 && n < 1000 ? n : ''; }
+
+/* =====================================================================
+   3.3 DATA: defaults, sample data, validation, storage
+   ===================================================================== */
+let state = null;        // the whole saved app state
+let storageOK = true;    // false if localStorage is blocked / unavailable
+
+/* UI state (not saved) */
+const ui = {
+  tab:'home', schedView:'week', slipWeek:'', slipOff:new Set(), weekCursor:'', monthCursor:null,
+  listSearch:'', listPast:false, pubViewId:'', pubSearch:'', pubCat:'',
+  pf:{pub:'', from:'', to:'', section:'', type:''}
+};
+
+function defaultTemplate(){
+  return [
+    ['treasures','Introduksiyon','chairman','',1],
+    ['treasures','Ulohan sa pakigpulong','treasures','Pakigpulong',10],
+    ['treasures','Espirituwal nga mga Bahandi','gems','Pakighisgot',10],
+    ['treasures','Pagbasa sa Bibliya','reading','Pagbasa',4],
+    ['ministry','Dihang Magsugod ug Panag-estorya','starting','Pagpamalaybalay',3],
+    ['ministry','Dihang Makig-estorya Pag-usab','following','Impormal nga Pagsangyaw',4],
+    ['ministry','Dihang Maghimog Tinun-an','disciples','Pasundayag',5],
+    ['living','Lokal nga mga Panginahanglan','localneeds','Pakighisgot',15],
+    ['living','Pagtuon sa Kongregasyon sa Bibliya','cbs','Pakighisgot',30],
+    ['living','Konklusyon','chairman','',3]
+  ].map(([section,title,type,format,duration]) => ({id:uid(),section,title,type,format,duration,assignee:'',assistant:'',notes:''}));
+}
+function defaultSettings(){
+  return {congName:'My Congregation', logoText:'', logoImage:'', meetingDay:3, meetingTime:'19:00', duration:105,
+    weekStart:1, theme:'light', categories:clone(DEFAULT_CATEGORIES), template:defaultTemplate(), lastBackup:'', secondHallDefault:false, bisaya:3, pubView:'list'};
+}
+
+/* Starting data for a new device: default settings, no publishers, no meetings.
+   PRIVACY: no names are stored in this file. Load your congregation's roster
+   with Settings › Import backup (a .json file you keep on your own devices). */
+function sampleData(){
+  const settings = defaultSettings();
+  return {app:APP_ID, version:1, settings, publishers:[], meetings:[], removed:{}, updatedAt:new Date().toISOString()};
+}
+
+/* Ministry parts keep setting, theme and counsel point in ONE text field
+   (part.theme), e.g. "HOUSE TO HOUSE. Offer a Bible study. (lmd lesson 7 point 4)".
+   Older data with separate fields is merged into it. */
+function mergeMinistry(p){
+  if (p.section !== 'ministry' || (!p.format && !p.notes)) return p;
+  const parts = [p.format ? p.format.toUpperCase() + '.' : '', p.theme, p.notes ? `(${p.notes})` : ''];
+  p.theme = parts.filter(Boolean).join(' ').slice(0, 400);
+  p.format = ''; p.notes = '';
+  return p;
+}
+const CEB_TITLES = {'Opening Remarks':'Introduksiyon', 'Closing Remarks':'Konklusyon',
+  'Treasures From God’s Word Talk':'Ulohan sa pakigpulong', "Treasures From God's Word Talk":'Ulohan sa pakigpulong',
+  'Spiritual Gems':'Espirituwal nga mga Bahandi', 'Bible Reading':'Pagbasa sa Bibliya',
+  'Following Up':'Dihang Makig-estorya Pag-usab', 'Starting a Conversation':'Dihang Magsugod ug Panag-estorya', 'Explaining Your Beliefs':'Pagpatin-aw sa Imong Tinuohan', 'Making Disciples':'Dihang Maghimog Tinun-an',
+  'Local Needs':'Lokal nga mga Panginahanglan', 'Congregation Bible Study':'Pagtuon sa Kongregasyon sa Bibliya'};
+const CEB_FORMATS = {'Talk':'Pakigpulong', 'Demonstration':'Pasundayag', 'Discussion':'Pakighisgot', 'Reading':'Pagbasa',
+  'House to House':'Pagpamalaybalay', 'Informal Witnessing':'Impormal nga Pagsangyaw', 'Public Witnessing':'Publiko nga Pagsangyaw'};
+const CEB_SETTINGS = [[/^HOUSE TO HOUSE\./i, 'PAGPAMALAYBALAY.'], [/^INFORMAL WITNESSING\./i, 'IMPORMAL NGA PAGSANGYAW.'], [/^PUBLIC WITNESSING\./i, 'PUBLIKO NGA PAGSANGYAW.'],
+  [/^DEMONSTRATION\./i, 'PASUNDAYAG.'], [/^TALK\./i, 'PAKIGPULONG.'], [/^DISCUSSION\./i, 'PAKIGHISGOT.']];
+function toBisaya(p){
+  if (CEB_TITLES[p.title]) p.title = CEB_TITLES[p.title];
+  if (CEB_FORMATS[p.format]) p.format = CEB_FORMATS[p.format];
+  CEB_SETTINGS.forEach(([re, w]) => { p.theme = (p.theme || '').replace(re, w); });
+  return p;
+}
+function normPart(p){
+  if (!p || typeof p !== 'object') return null;
+  return mergeMinistry({id:str(p.id,40) || uid(), section:SECTION_IDS.includes(p.section) ? p.section : 'living',
+    title:str(p.title,120) || 'Untitled part', type:str(p.type,40), format:str(p.format,40),
+    assignee:str(p.assignee,40), assistant:str(p.assistant,40), duration:int(p.duration,0,180,0),
+    hall2Assignee:str(p.hall2Assignee,40), hall2Assistant:str(p.hall2Assistant,40), theme:str(p.theme,400), off:!!p.off,
+    notes:str(p.notes,1000)});
+}
+
+/* Validate & normalise data from storage or an imported file.
+   Throws an Error with a human-readable message if the data is unusable. */
+function validateData(o){
+  if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('The file does not contain a backup from this app (expected a JSON object).');
+  if (o.app && o.app !== APP_ID) throw new Error('This backup was made by a different app and cannot be imported.');
+  if (!Array.isArray(o.meetings)) throw new Error('The backup is missing its list of meetings.');
+  if (!Array.isArray(o.publishers)) throw new Error('The backup is missing its list of publishers.');
+  const d = defaultSettings();
+  const si = (o.settings && typeof o.settings === 'object') ? o.settings : {};
+  const s = {
+    congName: str(si.congName,80) || d.congName,
+    logoText: str(si.logoText,4),
+    logoImage: (typeof si.logoImage === 'string' && /^data:image\/(png|jpe?g|webp|gif);base64,/.test(si.logoImage) && si.logoImage.length < 400000) ? si.logoImage : '',
+    meetingDay: int(si.meetingDay,0,6,d.meetingDay),
+    meetingTime: /^\d{2}:\d{2}$/.test(si.meetingTime || '') ? si.meetingTime : d.meetingTime,
+    duration: int(si.duration,10,300,d.duration),
+    weekStart: int(si.weekStart,0,6,d.weekStart),
+    theme: ['light','dark','auto'].includes(si.theme) ? si.theme : 'light',
+    lastBackup: str(si.lastBackup,40),
+    secondHallDefault: !!si.secondHallDefault,
+    pubView: ['card','list','table'].includes(si.pubView) ? si.pubView : 'list',
+    slipCopies: si.slipCopies !== false,   // also print an assistant's copy of each slip
+    bisaya: 3,
+    categories: Array.isArray(si.categories) ? si.categories.filter(c => c && typeof c.id === 'string' && c.id.trim()).map(c => ({id:str(c.id,40), name:str(c.name,60) || c.id})) : clone(DEFAULT_CATEGORIES),
+    template: Array.isArray(si.template) ? si.template.map(normPart).filter(Boolean) : d.template
+  };
+  // core categories must always exist
+  CORE_CATS.forEach(id => { if (!s.categories.some(c => c.id === id)) s.categories.push(clone(DEFAULT_CATEGORIES.find(c => c.id === id))); });
+  const pids = new Set();
+  const publishers = o.publishers.map((p, i) => {
+    if (!p || typeof p !== 'object' || !str(p.name)) throw new Error(`Publisher #${i + 1} has no name.`);
+    let id = str(p.id,40) || uid(); if (pids.has(id)) id = uid(); pids.add(id);
+    return {id, name:str(p.name,80), gender:['M','F'].includes(p.gender) ? p.gender : '',
+      categories:Array.isArray(p.categories) ? p.categories.filter(x => typeof x === 'string').slice(0,60) : [], notes:str(p.notes,500)};
+  });
+  const mids = new Set();
+  const meetings = o.meetings.map((m, i) => {
+    if (!m || typeof m !== 'object') throw new Error(`Meeting #${i + 1} is not valid.`);
+    if (!parseISO(m.date)) throw new Error(`Meeting #${i + 1} has an invalid date (“${str(m.date,20)}”). Dates must look like 2026-10-14.`);
+    let id = str(m.id,40) || uid(); if (mids.has(id)) id = uid(); mids.add(id);
+    const sg = (m.songs && typeof m.songs === 'object') ? m.songs : {};
+    return {id, date:m.date, weekLabel:str(m.weekLabel,60), reading:str(m.reading,100),
+      time:/^\d{2}:\d{2}$/.test(m.time || '') ? m.time : '',
+      chairman:str(m.chairman,40), openingPrayer:str(m.openingPrayer,40), closingPrayer:str(m.closingPrayer,40),
+      secondHall:!!m.secondHall, hall2Counselor:m.secondHall ? str(m.hall2Counselor,40) : '',
+      songs:{opening:songVal(sg.opening), middle:songVal(sg.middle), closing:songVal(sg.closing)},
+      notes:str(m.notes,2000), parts:Array.isArray(m.parts) ? m.parts.map(normPart).filter(Boolean) : []};
+  });
+  // One-time switch of English default wording to Bisaya (only exact default
+  // texts are changed; anything you typed yourself is left alone).
+  if (si.bisaya !== 3){   // v2: Starting a Conversation & Public Witnessing; v3: Explaining Your Beliefs
+    const oldCats = {beliefs:'Explaining Your Beliefs', starting:'Starting a Conversation (Initial Call)', prayer:'Prayer', treasures:'Treasures Talk', gems:'Spiritual Gems', reading:'Bible Reading',
+      following:'Following Up (Return Visit)', disciples:'Making Disciples (Bible Study)', living:'Living as Christians Part',
+      localneeds:'Local Needs', cbs:'Congregation Bible Study Conductor', cbsreader:'Congregation Bible Study Reader'};
+    s.categories.forEach(c => { if (oldCats[c.id] === c.name) c.name = DEFAULT_CATEGORIES.find(d => d.id === c.id).name; });
+    s.template.forEach(toBisaya);
+    meetings.forEach(m => m.parts.forEach(toBisaya));
+  }
+  const removed = {};
+  if (o.removed && typeof o.removed === 'object') for (const k in o.removed) if (typeof o.removed[k] === 'string') removed[str(k,40)] = str(o.removed[k],80);
+  return {app:APP_ID, version:1, settings:s, publishers, meetings, removed, updatedAt:str(o.updatedAt,40)};
+}
+
+/* Check localStorage really works (it can be blocked in some private or
+   file:// contexts) by writing and reading a test value. */
+function testStorage(){
+  try { const k = '__clm_test__'; localStorage.setItem(k, '1'); const ok = localStorage.getItem(k) === '1'; localStorage.removeItem(k); return ok; }
+  catch (e) { return false; }
+}
+
+/* Save the whole state. Called after every change (automatic saving). */
+function save(msg){
+  state.updatedAt = new Date().toISOString();
+  if (storageOK){
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+    catch (e) { storageOK = false; renderBanner(); toast('Could not save to this browser. Export a backup now.', 'error'); return; }
+  }
+  if (msg) toast(msg);
+}
+
+function load(){
+  storageOK = testStorage();
+  let raw = null;
+  if (storageOK){ try { raw = localStorage.getItem(STORE_KEY); } catch (e) { raw = null; } }
+  if (raw){
+    try { state = validateData(JSON.parse(raw)); return; }
+    catch (e){
+      // Keep the damaged copy aside instead of silently destroying it.
+      try { localStorage.setItem(STORE_KEY + '-damaged-' + Date.now(), raw); } catch (_) {}
+      console.error('Saved data could not be read:', e);
+      setTimeout(() => toast('Saved data could not be read; a copy was kept and sample data loaded.', 'error'), 300);
+    }
+  }
+  state = validateData(sampleData());
+  save();
+}
+
+/* =====================================================================
+   3.4 QUERIES: lookups, assignments, warnings, history
+   ===================================================================== */
+const pub = id => state.publishers.find(p => p.id === id);
+/* "Not needed" choice for student dropdowns: stored as this marker, counts as
+   filled, is shown faintly on screen and prints as a blank space. */
+const NONE = '__none__';
+const realId = id => id && id !== NONE ? id : '';
+/* "Chairman" choice for the prayer dropdowns: the meeting's chairman says the prayer. */
+const CHAIR = '__chair__';
+const prayerPid = (m, id) => id === CHAIR ? m.chairman : id;
+const prayerName = (m, id) => id === CHAIR ? (pname(m.chairman) || 'Chairman') : pname(id);
+function pname(id){
+  if (!id || id === NONE) return '';
+  if (id === CHAIR) return 'Chairman';
+  const p = pub(id); if (p) return p.name;
+  return state.removed[id] ? state.removed[id] + ' (removed)' : 'Unknown publisher';
+}
+const catName = id => (state.settings.categories.find(c => c.id === id) || {}).name || id || 'General';
+const secName = id => (SECTIONS.find(s => s.id === id) || {}).name || 'General';
+const isRemarks = p => p.type === 'chairman';
+/* The Congregation Bible Study part is fixed (not renamed, moved or deleted)
+   and can be switched off for a week (part.off = true). */
+const isCBS = p => p.type === 'cbs';
+const isFixed = p => isRemarks(p) || isCBS(p);
+const activeParts = parts => parts.filter(p => !p.off);
+/* Second hall (auxiliary classroom): the Bible reading and every
+   field-ministry part can also be held in a second hall. */
+const hall2Part = p => !isRemarks(p) && (p.section === 'ministry' || p.type === 'reading');
+const usesHall2 = (m, p) => !!m.secondHall && hall2Part(p);
+/* A householder/assistant is needed for every ministry setting except a talk. */
+/* A ministry part is a talk when its details start with "Talk" (no assistant needed). */
+const isTalk = p => /^\W*(talk|pakigpulong)\b/i.test(p.theme || p.format || '');
+const needsAssistant = p => p.type === 'cbs' || (p.section === 'ministry' ? !isTalk(p) : ['Demonstration', 'Pasundayag'].includes(p.format));
+const asstLabel = p => p.type === 'cbs' ? 'Reader' : 'Assistant';
+const asstCat = p => p.type === 'cbs' ? 'cbsreader' : 'assistant';
+const sortedMeetings = () => state.meetings.slice().sort((a, b) => a.date.localeCompare(b.date));
+const nextMeeting = () => sortedMeetings().find(m => m.date >= todayISO());
+const meetingTime = m => m.time || state.settings.meetingTime;
+const byName = (a, b) => a.name.localeCompare(b.name);
+
+/* Parts sorted by section order, keeping their order inside a section. */
+function orderedParts(parts){
+  return SECTION_IDS.flatMap(s => parts.filter(p => p.section === s));
+}
+
+/* Flatten a meeting into individual assignments (one per person per role). */
+function assignmentsOf(m){
+  const out = [];
+  const base = {m, date:m.date};
+  if (m.chairman) out.push({...base, pid:m.chairman, type:'chairman', label:'Chairman', section:'', sel:'[data-ed=chairman]'});
+  if (m.openingPrayer && m.openingPrayer !== CHAIR) out.push({...base, pid:m.openingPrayer, type:'prayer', label:'Opening Prayer', section:'', sel:'[data-ed=openingPrayer]'});
+  if (m.closingPrayer && m.closingPrayer !== CHAIR) out.push({...base, pid:m.closingPrayer, type:'prayer', label:'Closing Prayer', section:'', sel:'[data-ed=closingPrayer]'});
+  if (m.secondHall && m.hall2Counselor) out.push({...base, pid:m.hall2Counselor, type:'counselor', label:'Second Hall Counselor', section:'', sel:'[data-ed=hall2Counselor]'});
+  activeParts(m.parts).forEach(p => {
+    if (realId(p.assignee)) out.push({...base, pid:p.assignee, type:p.type, label:p.title, section:p.section, part:p, sel:`[data-ped=assignee][data-pid="${p.id}"]`});
+    if (realId(p.assistant)) out.push({...base, pid:p.assistant, type:asstCat(p), label:`${p.title} (${asstLabel(p).toLowerCase()})`, section:p.section, part:p, asst:true, sel:`[data-ped=assistant][data-pid="${p.id}"]`});
+    if (usesHall2(m, p)){
+      if (realId(p.hall2Assignee)) out.push({...base, pid:p.hall2Assignee, type:p.type, label:`${p.title} (second hall)`, section:p.section, part:p, hall2:true, sel:`[data-ped=hall2Assignee][data-pid="${p.id}"]`});
+      if (realId(p.hall2Assistant)) out.push({...base, pid:p.hall2Assistant, type:asstCat(p), label:`${p.title} (second hall ${asstLabel(p).toLowerCase()})`, section:p.section, part:p, asst:true, hall2:true, sel:`[data-ped=hall2Assistant][data-pid="${p.id}"]`});
+    }
+  });
+  return out;
+}
+const allAssignments = () => sortedMeetings().flatMap(assignmentsOf);
+
+/* Map "publisherId|type" -> most recent date before `before`,
+   ignoring the meeting being edited. Used for "last done" hints. */
+function buildLastMap(before, excludeId){
+  const map = {};
+  state.meetings.forEach(m => {
+    if (m.id === excludeId || (before && m.date >= before)) return;
+    assignmentsOf(m).forEach(a => {
+      const k = a.pid + '|' + a.type;
+      if (!map[k] || map[k] < a.date) map[k] = a.date;
+      if (!map[a.pid] || map[a.pid] < a.date) map[a.pid] = a.date;
+    });
+  });
+  return map;
+}
+
+/* Warnings for one meeting: duplicates, conflicts, eligibility, timing. */
+function meetingWarnings(m){
+  const w = [];
+  const list = assignmentsOf(m);
+  const counts = {};
+  list.forEach(a => { (counts[a.pid] = counts[a.pid] || []).push(a); });
+  for (const pid in counts){
+    const as = counts[pid];
+    if (as.length > 1) w.push({level:'warn', text:`${pname(pid)} has ${as.length} assignments in this meeting: ${as.map(a => a.label).join(', ')}.`,
+      targets:as.map(a => ({label:a.label, sel:a.sel}))});
+  }
+  activeParts(m.parts).forEach(p => {
+    if (usesHall2(m, p) && realId(p.hall2Assignee) && p.hall2Assignee === p.hall2Assistant) w.push({level:'conflict', text:`“${p.title}” (second hall): the same person is both participant and ${asstLabel(p).toLowerCase()}.`,
+      targets:[{label:'Edit', sel:`[data-ped=hall2Assistant][data-pid="${p.id}"]`}]});
+    // Student chosen but assistant (or Reader) still missing — "Not needed" counts as handled
+    if (!isRemarks(p) && needsAssistant(p) && realId(p.assignee) && !p.assistant) w.push({level:'warn', text:`“${p.title}”${usesHall2(m, p) ? ' (main hall)' : ''}: ${asstLabel(p).toLowerCase()} needed.`,
+      targets:[{label:`Choose ${asstLabel(p).toLowerCase()}`, sel:`[data-ped=assistant][data-pid="${p.id}"]`}]});
+    if (usesHall2(m, p) && needsAssistant(p) && realId(p.hall2Assignee) && !p.hall2Assistant) w.push({level:'warn', text:`“${p.title}” (second hall): ${asstLabel(p).toLowerCase()} needed.`,
+      targets:[{label:`Choose ${asstLabel(p).toLowerCase()}`, sel:`[data-ped=hall2Assistant][data-pid="${p.id}"]`}]});
+    if (realId(p.assignee) && p.assignee === p.assistant) w.push({level:'conflict', text:`“${p.title}”: the same person is both participant and ${asstLabel(p).toLowerCase()}.`,
+      targets:[{label:'Edit', sel:`[data-ped=assistant][data-pid="${p.id}"]`}]});
+  });
+  list.forEach(a => {
+    const p = pub(a.pid);
+    if (!p){ w.push({level:'conflict', text:`“${a.label}” is assigned to someone no longer in the directory.`, targets:[{label:'Edit', sel:a.sel}]}); return; }
+    if (a.type && !p.categories.includes(a.type)) w.push({level:'info', text:`${p.name} is not marked eligible for “${catName(a.type)}” (${a.label}).`, targets:[{label:'Edit', sel:a.sel}]});
+  });
+  if (state.meetings.some(x => x.id !== m.id && x.date === m.date)) w.push({level:'conflict', text:`Another meeting is scheduled on ${fmtShort(m.date)}.`, targets:[{label:'Edit date', sel:'[data-ed=date]'}]});
+  const total = activeParts(m.parts).reduce((t, p) => t + (p.duration || 0), 0);
+  if (total > state.settings.duration) w.push({level:'info', text:`Parts total ${total} min., longer than the default meeting length of ${state.settings.duration} min.`});
+  return w;
+}
+
+/* How complete is a meeting's schedule? */
+function readiness(m){
+  let need = 3, have = (m.chairman ? 1 : 0) + (m.openingPrayer ? 1 : 0) + (m.closingPrayer ? 1 : 0);
+  if (m.secondHall){ need++; if (m.hall2Counselor) have++; }
+  activeParts(m.parts).forEach(p => {
+    if (isRemarks(p)) return;
+    need++; if (p.assignee) have++;
+    if (needsAssistant(p)){ need++; if (p.assistant) have++; }
+    if (usesHall2(m, p)){
+      need++; if (p.hall2Assignee) have++;
+      if (needsAssistant(p)){ need++; if (p.hall2Assistant) have++; }
+    }
+  });
+  return {need, have, complete:need === have};
+}
+
+/* =====================================================================
+   3.5 SHARED RENDERERS (workbook-style program)
+   ===================================================================== */
+
+/* Turn a meeting into an ordered list of display rows. Used by the
+   screen view, the printout and the plain-text export, so all three match. */
+function programRows(m){
+  const parts = orderedParts(activeParts(m.parts));
+  const rows = []; let n = 0;
+  const tre = parts.filter(p => p.section === 'treasures');
+  const opening = tre[0] && isRemarks(tre[0]) ? tre[0] : null;
+  rows.push({kind:'song', song:m.songs.opening, pid:prayerPid(m, m.openingPrayer), role:'Pag-ampo', remark:opening});
+  SECTIONS.forEach(sec => {
+    let list = parts.filter(p => p.section === sec.id);
+    if (opening && sec.id === 'treasures') list = list.slice(1);
+    rows.push({kind:'section', sec, empty:!list.length});
+    if (sec.id === 'living' && m.songs.middle) rows.push({kind:'song', song:m.songs.middle});
+    list.forEach(p => rows.push(isRemarks(p) ? {kind:'remark', part:p} : {kind:'part', part:p, n:++n}));
+  });
+  rows.push({kind:'song', song:m.songs.closing, pid:prayerPid(m, m.closingPrayer), role:'Pag-ampo', closing:true});
+  return rows;
+}
+const songTxt = n => `Awit ${n || '—'}`;
+const secHead = (sec, tag = 'h3') => `<${tag} class="sec-head s-${sec.id}"><span class="sec-ico" aria-hidden="true">${sec.icon}</span>${esc(sec.name)}</${tag}>`;
+
+
+/* Show the assignment type only when it adds information beyond the title. */
+function showType(p){
+  if (!p.type) return false;
+  const a = catName(p.type).toLowerCase(), b = p.title.toLowerCase();
+  return !(a.includes(b) || b.includes(a));
+}
+const nameHTML = id => id === NONE ? '<span class="nn">Not needed</span>' : id ? `<b>${esc(pname(id))}</b>` : '<span class="unassigned">Unassigned</span>';
+/* Right-hand column of a part: participant (+ assistant), per hall. */
+function namesHTML(m, p, heading){
+  // Assistant name sits directly under the participant (no "Assistant" label).
+  // The Bible study keeps its "Reader" label.
+  const lbl = p.type === 'cbs' ? `<span class="lbl">${asstLabel(p)}</span>` : '';
+  const pair = (a, b) => nameHTML(a) + ((b || needsAssistant(p)) ? `${lbl}${b ? nameHTML(b) : `<span class="unassigned">${asstLabel(p)} needed</span>`}` : '');
+  if (!usesHall2(m, p)) return `<div class="names">${pair(p.assignee, p.assistant)}</div>`;
+  // Main hall and second hall sit side by side (two columns), not stacked
+  // heading = true on the first second-hall part of a section only
+  return `<div class="names">${heading ? '<span class="hh">Main hall</span>' : ''}${pair(p.assignee, p.assistant)}</div>
+    <div class="names">${heading ? '<span class="hh h2">Second hall</span>' : ''}${pair(p.hall2Assignee, p.hall2Assistant)}</div>`;
+}
+function renderProgram(m){
+  let h = '', headedSec = '';   // "Main hall | Second hall" heading, once per section
+  if (m.reading) h += `<div class="reading">${esc(m.reading)}</div>`;
+  programRows(m).forEach(r => {
+    if (r.kind === 'song'){
+      let left = `<span class="song">${songTxt(r.song)}</span>${r.pid !== undefined ? ' ug Pag-ampo' : ''}`;
+      if (r.remark) left += ` <span class="sep">|</span> ${esc(r.remark.title)} <span class="dur">(${r.remark.duration} min.)</span>`;
+      h += `<div class="prow srow"><p class="songline">${left}</p><div class="names">${r.role ? `<span class="lbl">${r.role}</span>${nameHTML(r.pid)}` : ''}</div></div>`;
+    } else if (r.kind === 'section'){
+      h += secHead(r.sec);
+      if (r.empty) h += `<p class="empty-sec">No parts in this section.</p>`;
+    } else if (r.kind === 'remark'){
+      h += `<div class="prow remark"><p style="margin:0"><b>${esc(r.part.title)}</b> <span class="dur">(${r.part.duration} min.)</span></p><div class="names">${nameHTML(r.part.assignee || m.chairman)}</div></div>`;
+    } else {
+      const p = r.part;
+      const heading = usesHall2(m, p) && headedSec !== p.section;
+      if (heading) headedSec = p.section;
+      const setting = p.section === 'ministry' && p.format ? `${esc(p.format.toUpperCase())}. ` : '';   // legacy
+      h += `<div class="part prow ${usesHall2(m, p) ? 'h2row ' : ''}s-${p.section}">
+        <div><div class="ptitle">${r.n}. ${esc(p.title)}</div>
+          <div class="pbody">(${p.duration} min.) ${setting}${p.theme ? esc(p.theme) : ''}
+          ${p.notes ? `<div class="pnote">${esc(p.notes)}</div>` : ''}</div></div>
+        ${namesHTML(m, p, heading)}</div>`;
+    }
+  });
+  return `<div class="prog${m.secondHall ? ' twohall' : ''}">${h}</div>`;
+}
+
+/* "Check before finalising" box. Each item has buttons that open the editor
+   (if needed) and jump straight to the field to change. */
+function warningsHTML(list, m){
+  if (!list.length) return '';
+  const btns = w => (w.targets || []).filter(t => t.sel).map(t =>
+    `<button class="btn sm jump" data-action="jumpTo" data-mid="${m ? m.id : ''}" data-sel="${esc(t.sel)}">${ICON.edit}${esc(t.label)}</button>`).join('');
+  const order = {conflict:0, warn:1, info:2};
+  list = list.slice().sort((a, b) => order[a.level] - order[b.level]);
+  const lvl = list.some(w => w.level === 'conflict') ? 'conflict' : (list.some(w => w.level === 'warn') ? '' : 'info');
+  return `<div class="notice ${lvl}"><p><b>Check before finalising</b></p><ul>${list.map(w => `<li>${esc(w.text)}${(w.targets || []).length ? `<div class="jumps">${btns(w)}</div>` : ''}</li>`).join('')}</ul></div>`;
+}
+
+function meetingMetaHTML(m){
+  return `<dl class="kv">
+    <div><dt>Date</dt><dd>${esc(fmtLong(m.date))}</dd></div>
+    <div><dt>Time</dt><dd>${esc(fmtTime(meetingTime(m)))}</dd></div>
+    <div><dt>Chairman</dt><dd>${m.chairman ? esc(pname(m.chairman)) : '<span class="unassigned">Unassigned</span>'}</dd></div>
+    <div><dt>Opening prayer</dt><dd>${m.openingPrayer ? esc(prayerName(m, m.openingPrayer)) : '<span class="unassigned">Unassigned</span>'}</dd></div>
+    <div><dt>Closing prayer</dt><dd>${m.closingPrayer ? esc(prayerName(m, m.closingPrayer)) : '<span class="unassigned">Unassigned</span>'}</dd></div>
+    ${m.secondHall ? `<div><dt>Second hall counselor</dt><dd>${m.hall2Counselor ? esc(pname(m.hall2Counselor)) : '<span class="unassigned">Unassigned</span>'}</dd></div>` : ''}
+    <div><dt>Songs</dt><dd>${[m.songs.opening, m.songs.middle, m.songs.closing].map(s => s || '—').join(', ')}</dd></div>
+  </dl>`;
+}
+
+function meetingActions(m){
+  return `<div class="btnrow">
+    <button class="btn primary" data-action="edit" data-id="${m.id}">${ICON.edit}Edit</button>
+    <button class="btn" data-action="print" data-id="${m.id}">${ICON.print}Print</button>
+    <button class="btn" data-action="copyText" data-id="${m.id}">${ICON.text}Copy text</button>
+    <button class="btn" data-action="share" data-id="${m.id}">${ICON.share}Share</button>
+    ${m.secondHall ? '' : `<button class="btn" data-action="addHall2" data-id="${m.id}">${ICON.plus}Second hall</button>`}
+    <button class="btn" data-action="duplicate" data-id="${m.id}">${ICON.copy}Duplicate</button>
+    <button class="btn danger" data-action="delMeeting" data-id="${m.id}">${ICON.trash}Delete</button>
+  </div>`;
+}
+
+/* =====================================================================
+   3.6 VIEWS
+   ===================================================================== */
+function brandHTML(){
+  const s = state.settings;
+  const initials = s.logoText || s.congName.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  const logo = s.logoImage ? `<img src="${s.logoImage}" alt="">` : esc(initials);
+  return `<span class="logo" aria-hidden="true">${logo}</span><b>${esc(s.congName)}</b>`;
+}
+
+function render(){
+  const tab = TABS.find(t => t.id === ui.tab);
+  const navHTML = short => TABS.map(t => `<button class="navbtn ${t.id === ui.tab ? 'active' : ''}" data-action="nav" data-tab="${t.id}" ${t.id === ui.tab ? 'aria-current="page"' : ''}>${t.icon}<span>${short && t.short ? t.short : t.label}</span></button>`).join('');
+  $('#sideNav').innerHTML = navHTML(false);
+  $('#bottomNav').innerHTML = navHTML(true);
+  $('#sideBrand').innerHTML = brandHTML();
+  $('#topBrand').innerHTML = `<span class="logo" aria-hidden="true">${$('#sideBrand .logo').innerHTML}</span>`;
+  $('#topTitle').textContent = ui.tab === 'home' ? state.settings.congName : tab.title;
+  $('#topAdd').innerHTML = ICON.plus + '<span>Meeting</span>';
+  $('#sideFoot').textContent = state.updatedAt ? 'Saved on this device · ' + new Date(state.updatedAt).toLocaleString() : '';
+  const views = {home:viewHome, schedule:viewSchedule, slips:viewSlips, publishers:viewPublishers, planner:viewPlanner, settings:viewSettings};
+  $('#view').innerHTML = views[ui.tab]();
+  renderBanner();
+}
+
+function renderBanner(){
+  $('#banner').innerHTML = storageOK ? '' :
+    `<div class="banner">This browser is not letting the app save data. Changes will be lost when the page closes — use Settings › Export backup, or open the app from a hosted address (see Settings › About storage).</div>`;
+}
+
+/* ---------- Home / dashboard ---------- */
+function viewHome(){
+  const m = nextMeeting();
+  const s = state.settings;
+  const backupAge = s.lastBackup ? daysUntil(s.lastBackup.slice(0, 10)) * -1 : null;
+  const backupNote = (backupAge === null || backupAge > 14)
+    ? `<div class="notice info" style="margin-top:20px"><p><b>${backupAge === null ? 'No backup yet.' : `Last backup was ${backupAge} days ago.`}</b> Your data is stored only in this browser. Export a backup file regularly.</p><div class="btnrow" style="margin-top:8px"><button class="btn sm" data-action="exportJSON">${ICON.download}Export backup</button></div></div>` : '';
+  if (!m){
+    return `<div class="wrap"><div class="empty"><h3>No upcoming meetings</h3><p>Add the next midweek meeting from your workbook to see it here.</p>
+      <div class="btnrow"><button class="btn primary" data-action="addMeeting">${ICON.plus}Add meeting</button>
+      <button class="btn" data-action="nav" data-tab="publishers">${ICON.users}Manage publishers</button>
+      ${state.publishers.length ? '' : `<button class="btn" data-action="importJSON">${ICON.upload}Import backup</button>`}</div></div>${backupNote}</div>`;
+  }
+  const r = readiness(m);
+  const dd = daysUntil(m.date);
+  const when = dd === 0 ? 'Today' : dd === 1 ? 'Tomorrow' : `In ${dd} days`;
+  const warns = meetingWarnings(m);
+  return `
+  <div class="band"><div class="wrap"><p class="kicker">Next meeting · ${when}</p><h2>${esc(weekLabel(m))}</h2></div></div>
+  <div class="wrap">
+    ${meetingMetaHTML(m)}
+    <div class="panel" style="margin:6px 0 4px">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+        <b>${r.complete ? 'Schedule complete' : `${r.have} of ${r.need} assignments filled`}</b>
+        <span class="chip ${r.complete ? 'ok' : 'warn'}">${r.complete ? 'Ready' : 'In progress'}</span>
+      </div>
+      <div class="progress" aria-hidden="true"><i style="width:${Math.round(r.have / r.need * 100)}%"></i></div>
+    </div>
+    <div class="btnrow" style="margin:16px 0">
+      <button class="btn primary" data-action="edit" data-id="${m.id}">${ICON.edit}Edit this meeting</button>
+      <button class="btn" data-action="openWeek" data-date="${m.date}">${ICON.cal}Full schedule</button>
+      ${m.secondHall ? '' : `<button class="btn" data-action="addHall2" data-id="${m.id}">${ICON.plus}Second hall</button>`}
+      <button class="btn" data-action="addMeeting">${ICON.plus}Add meeting</button>
+      <button class="btn" data-action="nav" data-tab="publishers">${ICON.users}Publishers</button>
+    </div>
+    ${warningsHTML(warns, m)}
+    ${renderProgram(m)}
+    ${m.notes ? `<div class="notice info" style="margin-top:16px"><p><b>Notes:</b> ${esc(m.notes)}</p></div>` : ''}
+    ${backupNote}
+  </div>`;
+}
+
+/* ---------- Schedule (week / month / list / publisher) ---------- */
+function viewSchedule(){
+  const seg = [['week','Week'],['month','Month'],['list','List'],['publisher','By publisher']]
+    .map(([v, l]) => `<button class="${ui.schedView === v ? 'on' : ''}" data-action="schedView" data-v="${v}">${l}</button>`).join('');
+  const body = {week:schedWeek, month:schedMonth, list:schedList, publisher:schedPublisher}[ui.schedView]();
+  return `<div class="wrap" style="padding-top:14px"><div class="seg" role="tablist">${seg}</div></div>${body}`;
+}
+
+function schedWeek(){
+  if (!ui.weekCursor) ui.weekCursor = toISO(weekStartOf(new Date()));
+  const ws = parseISO(ui.weekCursor), we = toISO(addDays(ws, 6));
+  const list = sortedMeetings().filter(m => m.date >= ui.weekCursor && m.date <= we);
+  const nav = `<div class="wrap"><div class="toolbar">
+      <div class="weeknav"><button class="btn icon" data-action="weekPrev" aria-label="Previous week">${ICON.left}</button>
+      <button class="btn" data-action="weekToday">This week</button>
+      <button class="btn icon" data-action="weekNext" aria-label="Next week">${ICON.right}</button></div>
+    </div></div>`;
+  if (!list.length){
+    const mDate = toISO(addDays(ws, (state.settings.meetingDay - state.settings.weekStart + 7) % 7));
+    return nav + `<div class="band"><div class="wrap"><h2>${esc(fmtRange(ws))}</h2></div></div>
+      <div class="wrap"><div class="empty"><h3>No meeting scheduled this week</h3><p>Add the program for ${esc(fmtLong(mDate))}.</p>
+      <div class="btnrow"><button class="btn primary" data-action="addMeeting" data-date="${mDate}">${ICON.plus}Add meeting</button></div></div></div>`;
+  }
+  return nav + list.map(m => `
+    <div class="band"><div class="wrap"><h2>${esc(weekLabel(m))}</h2></div></div>
+    <div class="wrap">
+      ${meetingMetaHTML(m)}
+      ${meetingActions(m)}
+      <div style="margin-top:14px">${warningsHTML(meetingWarnings(m), m)}</div>
+      ${renderProgram(m)}
+      ${m.notes ? `<div class="notice info" style="margin:16px 0"><p><b>Notes:</b> ${esc(m.notes)}</p></div>` : ''}
+    </div>`).join('<div style="height:28px"></div>');
+}
+
+function schedMonth(){
+  if (!ui.monthCursor){ const d = new Date(); ui.monthCursor = {y:d.getFullYear(), m:d.getMonth()}; }
+  const {y, m} = ui.monthCursor;
+  const first = new Date(y, m, 1);
+  const start = weekStartOf(first);
+  const byDate = {};
+  state.meetings.forEach(x => { (byDate[x.date] = byDate[x.date] || []).push(x); });
+  const t = todayISO();
+  let cells = '';
+  for (let i = 0; i < 7; i++) cells += `<div class="dow">${DAYS[(state.settings.weekStart + i) % 7].slice(0, 3)}</div>`;
+  const last = new Date(y, m + 1, 0);
+  const weeks = Math.ceil((((first - start) / 864e5) + last.getDate()) / 7);
+  for (let i = 0; i < weeks * 7; i++){
+    const d = addDays(start, i), iso = toISO(d);
+    const inMonth = d.getMonth() === m;
+    const ms = byDate[iso] || [];
+    const cls = ['day', inMonth ? '' : 'out', iso === t ? 'today' : '', ms.length ? 'has' : ''];
+    let inner = `<span class="dn">${d.getDate()}</span>`;
+    let attr = '';
+    if (ms.length){
+      ms.forEach(x => { const r = readiness(x); inner += `<span class="mt ${r.complete ? '' : 'partial'}">${r.complete ? 'Ready' : `${r.have}/${r.need}`}</span>`; });
+      attr = `data-action="openWeek" data-date="${iso}" aria-label="Open meeting on ${esc(fmtLong(iso))}"`;
+    } else if (d.getDay() === state.settings.meetingDay && inMonth){
+      cls.push('add'); inner += '<span class="plus">+ Add</span>';
+      attr = `data-action="addMeeting" data-date="${iso}" aria-label="Add meeting on ${esc(fmtLong(iso))}"`;
+    }
+    cells += attr ? `<button class="${cls.join(' ')}" ${attr}>${inner}</button>` : `<div class="${cls.join(' ')}">${inner}</div>`;
+  }
+  const monthMeetings = sortedMeetings().filter(x => { const d = parseISO(x.date); return d.getFullYear() === y && d.getMonth() === m; });
+  return `<div class="wrap">
+    <div class="toolbar">
+      <div class="weeknav"><button class="btn icon" data-action="monthPrev" aria-label="Previous month">${ICON.left}</button>
+        <button class="btn" data-action="monthToday">Today</button>
+        <button class="btn icon" data-action="monthNext" aria-label="Next month">${ICON.right}</button></div>
+      <button class="btn" data-action="printMonth" ${monthMeetings.length ? '' : 'disabled'}>${ICON.print}Print month</button>
+    </div>
+    <h2 style="margin:4px 0 12px;font-size:26px">${MONTHS[m]} ${y}</h2>
+    <div class="cal">${cells}</div>
+    <div class="legend"><span><i style="background:var(--ok)"></i>All parts assigned</span><span><i style="background:var(--ministry-bg)"></i>Still being planned (filled/total)</span></div>
+  </div>`;
+}
+
+function listMatches(m, q){
+  if (!q) return true;
+  const hay = [weekLabel(m), fmtLong(m.date), m.reading, m.notes, pname(m.chairman), prayerName(m, m.openingPrayer), prayerName(m, m.closingPrayer),
+    pname(m.hall2Counselor), ...m.parts.flatMap(p => [p.title, p.theme, pname(p.assignee), pname(p.assistant), pname(p.hall2Assignee), pname(p.hall2Assistant), p.notes])].join(' ').toLowerCase();
+  return q.toLowerCase().split(/\s+/).every(w => hay.includes(w));
+}
+function schedList(){
+  return `<div class="wrap">
+    <div class="toolbar">
+      <input class="input" type="search" id="listSearch" placeholder="Search names, parts, notes…" value="${esc(ui.listSearch)}" style="flex:1;min-width:200px" aria-label="Search meetings">
+      <label class="check"><input type="checkbox" id="listPast" ${ui.listPast ? 'checked' : ''}> Include past</label>
+    </div>
+    <div id="listResults">${listResultsHTML()}</div>
+  </div>`;
+}
+function listResultsHTML(){
+  const t = todayISO();
+  const list = sortedMeetings().filter(m => (ui.listPast || m.date >= t) && listMatches(m, ui.listSearch));
+  if (!list.length) return `<div class="empty"><h3>${state.meetings.length ? 'No meetings match' : 'No meetings yet'}</h3><p>${state.meetings.length ? 'Try another search, or include past meetings.' : 'Add your first meeting to start the schedule.'}</p><div class="btnrow"><button class="btn primary" data-action="addMeeting">${ICON.plus}Add meeting</button></div></div>`;
+  return `<div class="btnrow" style="justify-content:flex-end;margin-bottom:8px"><button class="btn sm" data-action="printList">${ICON.print}Print these ${list.length}</button></div>
+  <div class="rows">${list.map(m => {
+    const d = parseISO(m.date), r = readiness(m);
+    return `<div class="row">
+      <div class="datebox"><span>${MONTHS[d.getMonth()].slice(0, 3).toUpperCase()}</span><b>${d.getDate()}</b></div>
+      <button class="main" data-action="openWeek" data-date="${m.date}" style="background:none;border:0;text-align:left;padding:0;cursor:pointer">
+        <div class="title">${esc(weekLabel(m))}${m.date < t ? ' <span class="chip">Past</span>' : ''}</div>
+        <div class="sub">${esc(DAYS[d.getDay()])} · Chairman: ${esc(pname(m.chairman) || 'unassigned')}</div>
+      </button>
+      <span class="chip ${r.complete ? 'ok' : 'warn'}">${r.complete ? 'Ready' : `${r.have}/${r.need}`}</span>
+      <div class="acts"><button class="btn icon sm ghost" data-action="edit" data-id="${m.id}" aria-label="Edit">${ICON.edit}</button>
+      <button class="btn icon sm ghost" data-action="duplicate" data-id="${m.id}" aria-label="Duplicate">${ICON.copy}</button>
+      <button class="btn icon sm ghost" data-action="delMeeting" data-id="${m.id}" aria-label="Delete">${ICON.trash}</button></div>
+    </div>`; }).join('')}</div>`;
+}
+
+function schedPublisher(){
+  const opts = state.publishers.slice().sort(byName).map(p => `<option value="${p.id}" ${p.id === ui.pubViewId ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  let body = '';
+  if (!state.publishers.length) body = `<div class="empty"><h3>No publishers yet</h3><p>Add publishers to see their assignments.</p><div class="btnrow"><button class="btn primary" data-action="addPub">${ICON.plus}Add publisher</button></div></div>`;
+  else if (!ui.pubViewId) body = `<div class="empty"><p>Choose a publisher to see their upcoming assignments.</p></div>`;
+  else {
+    const t = todayISO();
+    const items = allAssignments().filter(a => a.pid === ui.pubViewId && a.date >= t);
+    body = items.length ? `<div class="rows">${items.map(assignRow).join('')}</div>`
+      : `<div class="empty"><h3>No upcoming assignments</h3><p>${esc(pname(ui.pubViewId))} has nothing scheduled from today onward.</p></div>`;
+  }
+  return `<div class="wrap"><div class="toolbar"><label class="field" style="flex:1"><span>Publisher</span>
+    <select class="input" id="pubViewSel"><option value="">Choose a publisher…</option>${opts}</select></label></div>${body}</div>`;
+}
+
+function assignRow(a){
+  const d = parseISO(a.date);
+  return `<div class="row">
+    <div class="datebox"><span>${MONTHS[d.getMonth()].slice(0, 3).toUpperCase()}</span><b>${d.getDate()}</b></div>
+    <div class="main"><div class="title">${esc(a.label)}</div>
+      <div class="sub">${esc(pname(a.pid))} · ${esc(a.section ? secName(a.section) : 'Meeting role')} · ${esc(catName(a.type))}</div></div>
+    <div class="acts"><button class="btn icon sm ghost" data-action="edit" data-id="${a.m.id}" aria-label="Edit or reassign">${ICON.edit}</button></div>
+  </div>`;
+}
+
+/* ---------- Assignments & slips (S-89 assignment slips) ---------- */
+/* Student assignments in a meeting: the Bible reading and every field
+   ministry part, once for the main hall and once for the second hall. */
+function slipItems(m){
+  const nums = {};
+  programRows(m).forEach(r => { if (r.kind === 'part') nums[r.part.id] = r.n; });
+  const out = [];
+  orderedParts(activeParts(m.parts)).forEach(p => {
+    if (!hall2Part(p)) return;
+    out.push({m, p, hall:1, num:nums[p.id], student:p.assignee, assistant:p.assistant, key:`${m.id}|${p.id}|1`});
+    if (usesHall2(m, p)) out.push({m, p, hall:2, num:nums[p.id], student:p.hall2Assignee, assistant:p.hall2Assistant, key:`${m.id}|${p.id}|2`});
+  });
+  return out;
+}
+const slipReady = it => !!realId(it.student);
+function findSlip(key){
+  const m = findMeeting(key.split('|')[0]);
+  return m ? slipItems(m).find(it => it.key === key) : null;
+}
+const fmtDate = iso => { const d = parseISO(iso); return d ? `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}` : ''; };
+
+/* One assignment slip, laid out like the printed S-89 form. */
+function slipHTML(it, asstCopy){
+  const box = on => `<span class="sl-box">${on ? '✓' : ''}</span>`;
+  return `<div class="slip${asstCopy ? ' copy' : ''}">
+    ${asstCopy ? `<div class="sl-copy">Assistant’s copy</div>` : ''}
+    <h1>Our Christian Life and Ministry Meeting Assignment</h1>
+    <div class="sl-f"><b>Name:</b><span>${esc(pname(it.student))}</span></div>
+    <div class="sl-f"><b>Assistant:</b><span>${esc(pname(it.assistant))}</span></div>
+    <div class="sl-f"><b>Date:</b><span>${esc(weekLabel(it.m))}</span></div>
+    <div class="sl-f sl-part"><b>Part no.:</b><span>${it.num ? it.num + '. ' : ''}${esc(it.p.title).replace(/-/g, '\u2011')}</span></div>
+    <div class="sl-given"><b>To be given in:</b>
+      <div>${box(it.hall === 1)} Main hall</div>
+      <div>${box(it.hall === 2)} Auxiliary classroom 1</div>
+      <div>${box(false)} Auxiliary classroom 2</div>
+    </div>
+    <p class="sl-note"><b>Note to student:</b> The source material and study point for your assignment can be found in the <i>Life and Ministry Meeting Workbook</i>. Please review the instructions for the part as outlined in <i>Instructions for Our Christian Life and Ministry Meeting</i> (S-38).</p>
+    <div class="sl-code">S-89-E&nbsp;&nbsp;11/23</div>
+  </div>`;
+}
+function printSlips(items){
+  items = items.filter(slipReady);
+  if (!items.length) return toast('No assigned students to print slips for.', 'error');
+  // Each student's slip, followed by a copy for the assistant (if any and if switched on)
+  const html = items.map(it => slipHTML(it) + (state.settings.slipCopies && realId(it.assistant) ? slipHTML(it, true) : '')).join('');
+  $('#printArea').innerHTML = `<div class="slips">${html}</div>`;
+  document.body.classList.add('printing');
+  setTimeout(() => window.print(), 60);
+}
+function slipWeekMeetings(){
+  if (!ui.slipWeek) ui.slipWeek = toISO(weekStartOf(parseISO((nextMeeting() || {}).date || todayISO())));
+  const we = toISO(addDays(parseISO(ui.slipWeek), 6));
+  return sortedMeetings().filter(m => m.date >= ui.slipWeek && m.date <= we);
+}
+
+function viewSlips(){
+  const list = slipWeekMeetings();
+  const items = list.flatMap(slipItems);
+  const chosen = items.filter(it => slipReady(it) && !ui.slipOff.has(it.key));
+  const copies = state.settings.slipCopies ? chosen.filter(it => realId(it.assistant)).length : 0;
+  const total = chosen.length + copies;
+  const nav = `<div class="toolbar">
+      <div class="weeknav"><button class="btn icon" data-action="slipWeek" data-dir="-1" aria-label="Previous week">${ICON.left}</button>
+      <button class="btn" data-action="slipWeek" data-dir="0">Next meeting</button>
+      <button class="btn icon" data-action="slipWeek" data-dir="1" aria-label="Next week">${ICON.right}</button></div>
+      <button class="btn primary" data-action="slipPrintSel" ${chosen.length ? '' : 'disabled'}>${ICON.print}Print ${total} slip${total === 1 ? '' : 's'}</button>
+    </div>`;
+  if (!list.length){
+    return `<div class="band"><div class="wrap"><h2>${esc(fmtRange(parseISO(ui.slipWeek)))}</h2></div></div>
+      <div class="wrap">${nav}<div class="empty"><h3>No meeting this week</h3><p>Use the arrows to go to a week with a meeting.</p></div></div>`;
+  }
+  return list.map(m => {
+    const its = slipItems(m);
+    return `<div class="band"><div class="wrap"><p class="kicker">${esc(fmtLong(m.date))}</p><h2>${esc(weekLabel(m))}</h2></div></div>
+    <div class="wrap">${nav}
+      <div class="btnrow" style="margin-bottom:6px"><button class="btn sm" data-action="slipSelAll" data-v="1">Select all</button><button class="btn sm" data-action="slipSelAll" data-v="0">Select none</button>
+        <span class="muted" style="font-size:14px">Tick the slips to print — 4 per A4 page.</span></div>
+      <label class="check" style="margin-bottom:6px"><input type="checkbox" data-set="slipCopies" ${state.settings.slipCopies ? 'checked' : ''}> Also print a copy for each assistant${copies ? ` (${copies})` : ''}</label>
+      ${its.length ? `<div class="rows">${its.map(it => {
+        const ok = slipReady(it);
+        return `<div class="row slip-row">
+          <input type="checkbox" class="slipchk" data-slip="${it.key}" ${ok && !ui.slipOff.has(it.key) ? 'checked' : ''} ${ok ? '' : 'disabled'} aria-label="Include slip">
+          <div class="main">
+            <div class="title"><span class="s-${it.p.section}" style="color:var(--${it.p.section})">${it.num}. ${esc(it.p.title)}</span></div>
+            <div class="sub"><span class="hallchip ${it.hall === 2 ? 'h2' : ''}">${it.hall === 2 ? 'Aux. classroom 1' : 'Main hall'}</span>
+              ${ok ? `<b style="color:var(--text)">${esc(pname(it.student))}</b>${realId(it.assistant) ? ` · ${esc(pname(it.assistant))}` : ''}` : `<span class="unassigned">${it.student === NONE ? 'Not needed' : 'Unassigned — no slip'}</span>`}</div>
+          </div>
+          <div class="acts"><button class="btn sm" data-action="slipPreview" data-key="${it.key}" ${ok ? '' : 'disabled'}>View</button>
+            <button class="btn icon sm" data-action="slipPrint" data-key="${it.key}" aria-label="Print this slip" ${ok ? '' : 'disabled'}>${ICON.print}</button></div>
+        </div>`; }).join('')}</div>` : '<p class="muted">This meeting has no student parts.</p>'}
+    </div>`; }).join('');
+}
+
+/* ---------- Publishers ---------- */
+function viewPublishers(){
+  const catOpts = state.settings.categories.map(c => `<option value="${c.id}" ${c.id === ui.pubCat ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  return `<div class="wrap" style="padding-top:14px">
+    <div class="toolbar">
+      <input class="input" type="search" id="pubSearch" placeholder="Search by name…" value="${esc(ui.pubSearch)}" style="flex:2;min-width:180px" aria-label="Search publishers">
+      <select class="input" id="pubCat" style="flex:1;min-width:160px" aria-label="Filter by eligibility"><option value="">All eligibility</option>${catOpts}</select>
+      <button class="btn primary" data-action="addPub">${ICON.plus}Add publisher</button>
+    </div>
+    <div class="seg" style="margin-bottom:12px;max-width:360px" role="group" aria-label="View">${[['card','Cards'],['list','List'],['table','Table']].map(([v, l]) =>
+      `<button class="${state.settings.pubView === v ? 'on' : ''}" data-action="pubView" data-v="${v}">${l}</button>`).join('')}</div>
+    <div id="pubResults">${pubResultsHTML()}</div>
+  </div>`;
+}
+/* Short eligibility labels for the Table view (full names are in Cards/List). */
+const SHORT_CAT = {chairman:'Chairman', prayer:'Pag-ampo', treasures:'Pakigpulong', gems:'Bahandi', reading:'Pagbasa',
+  starting:'Magsugod', following:'Pag-usab', disciples:'Tinun-an', beliefs:'Tinuohan', studenttalk:'Student talk',
+  assistant:'Assistant', living:'Kristohanon', localneeds:'Lokal', cbs:'CBS conductor', cbsreader:'CBS reader', counselor:'Counselor'};
+function shortElig(p){
+  const cats = state.settings.categories.map(c => c.id).filter(id => p.categories.includes(id));
+  if (!cats.length) return '';
+  if (state.settings.categories.every(c => p.categories.includes(c.id))) return 'All assignments';
+  const ministry = ['starting', 'following', 'disciples', 'beliefs'];
+  const out = [];
+  const hasAllMin = ministry.every(id => cats.includes(id));
+  cats.forEach(id => {
+    if (hasAllMin && ministry.includes(id)){ if (id === 'starting') out.push('Ministeryo'); return; }
+    out.push(SHORT_CAT[id] || catName(id));
+  });
+  return out.join(', ');
+}
+/* Publishers can be shown as Cards, a List, or a Table (choice is remembered). */
+function pubResultsHTML(){
+  if (!state.publishers.length) return `<div class="empty"><h3>No publishers yet</h3><p>Load your congregation roster from its backup file, or add publishers one by one.</p><div class="btnrow"><button class="btn primary" data-action="importJSON">${ICON.upload}Import roster backup</button><button class="btn" data-action="addPub">${ICON.plus}Add publisher</button></div></div>`;
+  const q = ui.pubSearch.trim().toLowerCase();
+  const list = state.publishers.filter(p => (!q || p.name.toLowerCase().includes(q)) && (!ui.pubCat || p.categories.includes(ui.pubCat))).sort(byName);
+  if (!list.length) return `<div class="empty"><h3>No publishers match</h3><p>Clear the search or eligibility filter.</p></div>`;
+  const t = todayISO();
+  const all = allAssignments();
+  const info = p => {
+    const mine = all.filter(a => a.pid === p.id);
+    const past = mine.filter(a => a.date < t);
+    return {upcoming:mine.filter(a => a.date >= t).length, last:past.length ? past[past.length - 1].date : ''};
+  };
+  const gender = p => p.gender ? (p.gender === 'M' ? 'Brother' : 'Sister') : '';
+  const chips = p => p.categories.length ? p.categories.map(c => `<span class="chip cat">${esc(catName(c))}</span>`).join('') : '<span class="chip warn">No eligibility set</span>';
+  const acts = p => `<div class="acts"><button class="btn icon sm ghost" data-action="editPub" data-id="${p.id}" aria-label="Edit ${esc(p.name)}">${ICON.edit}</button>
+      <button class="btn icon sm ghost" data-action="delPub" data-id="${p.id}" aria-label="Delete ${esc(p.name)}">${ICON.trash}</button></div>`;
+  const view = state.settings.pubView;
+  let body;
+  if (view === 'card'){
+    body = `<div class="pcards">${list.map(p => { const i = info(p); return `<div class="pubcard ${p.gender === 'F' ? 'sis' : ''}">
+      <button class="pc-main" data-action="editPub" data-id="${p.id}">
+        <div class="pc-name">${esc(p.name)}</div>
+        <div class="sub">${gender(p) || '&nbsp;'}</div>
+        <div class="pc-stats"><span><b>${i.upcoming}</b> upcoming</span><span>Last: <b>${i.last ? esc(fmtMD(i.last)) : '—'}</b></span></div>
+        <div class="cats">${chips(p)}</div>
+      </button>${acts(p)}</div>`; }).join('')}</div>`;
+  } else if (view === 'table'){
+    body = `<div class="scroll-x"><table class="tbl pubtbl"><thead><tr><th>Name</th><th></th><th>Eligible for</th><th>Upcoming</th><th>Last assignment</th><th></th></tr></thead><tbody>
+      ${list.map(p => { const i = info(p); return `<tr>
+        <td><button class="linkbtn" data-action="editPub" data-id="${p.id}">${esc(p.name)}</button></td>
+        <td class="muted">${gender(p)}</td>
+        <td class="elig" title="${esc(p.categories.map(catName).join(', '))}">${shortElig(p) ? esc(shortElig(p)) : '<span class="chip warn">None</span>'}</td>
+        <td>${i.upcoming}</td><td>${i.last ? esc(fmtShort(i.last)) : '—'}</td>
+        <td>${acts(p)}</td></tr>`; }).join('')}</tbody></table></div>`;
+  } else {
+    body = `<div class="rows">${list.map(p => { const i = info(p); return `<div class="row">
+      <button class="main" data-action="editPub" data-id="${p.id}" style="background:none;border:0;text-align:left;padding:0;cursor:pointer">
+        <div class="title">${esc(p.name)} ${gender(p) ? `<span class="muted" style="font-weight:400">(${gender(p)})</span>` : ''}</div>
+        <div class="sub">${i.upcoming} upcoming · last assignment ${i.last ? esc(fmtShort(i.last)) : 'none recorded'}</div>
+        <div class="cats">${chips(p)}</div>
+      </button>${acts(p)}</div>`; }).join('')}</div>`;
+  }
+  return `<p class="muted" style="font-size:14px">${list.length} of ${state.publishers.length} publishers</p>${body}`;
+}
+
+/* ---------- Planner (assignments, history, conflicts) ---------- */
+function viewPlanner(){
+  const f = ui.pf;
+  const pubOpts = state.publishers.slice().sort(byName).map(p => `<option value="${p.id}" ${p.id === f.pub ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  const typeOpts = state.settings.categories.map(c => `<option value="${c.id}" ${c.id === f.type ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  const secOpts = [['general','Meeting roles (chairman, prayers)'], ...SECTIONS.map(s => [s.id, s.name])].map(([v, l]) => `<option value="${v}" ${v === f.section ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  const t = todayISO();
+
+  // Conflicts in upcoming meetings
+  const issues = sortedMeetings().filter(m => m.date >= t).map(m => ({m, w:meetingWarnings(m).filter(x => x.level !== 'info')})).filter(x => x.w.length);
+  const conflictHTML = issues.length
+    ? `<div class="notice conflict"><p><b>${issues.length} upcoming meeting${issues.length > 1 ? 's need' : ' needs'} attention</b></p><ul>${issues.map(x => `<li><b>${esc(fmtShort(x.m.date))}:</b> ${x.w.map(w => esc(w.text)).join(' ')} <button class="btn sm" data-action="edit" data-id="${x.m.id}" style="margin-left:4px">Fix</button></li>`).join('')}</ul></div>`
+    : `<div class="notice ok"><p>No conflicts or double assignments in upcoming meetings.</p></div>`;
+
+  // Filtered assignment list
+  const list = allAssignments().filter(a =>
+    (!f.pub || a.pid === f.pub) && (!f.from || a.date >= f.from) && (!f.to || a.date <= f.to) &&
+    (!f.section || (f.section === 'general' ? !a.section : a.section === f.section)) &&
+    (!f.type || a.type === f.type));
+
+  return `<div class="wrap" style="padding-top:14px">
+    ${conflictHTML}
+    <h2 class="subhead">Assignments</h2>
+    <div class="grid3">
+      <label class="field"><span>Publisher</span><select class="input" data-filter="pub"><option value="">All publishers</option>${pubOpts}</select></label>
+      <label class="field"><span>From</span><input class="input" type="date" data-filter="from" value="${esc(f.from)}"></label>
+      <label class="field"><span>To</span><input class="input" type="date" data-filter="to" value="${esc(f.to)}"></label>
+      <label class="field"><span>Section</span><select class="input" data-filter="section"><option value="">All sections</option>${secOpts}</select></label>
+      <label class="field"><span>Assignment type</span><select class="input" data-filter="type"><option value="">All types</option>${typeOpts}</select></label>
+    </div>
+    <div class="btnrow" style="margin:10px 0"><button class="btn sm" data-action="pfUpcoming">Upcoming only</button><button class="btn sm" data-action="pfReset">Show everything</button>
+      <span class="muted" style="font-size:14px">${list.length} assignment${list.length === 1 ? '' : 's'}</span></div>
+    ${list.length ? `<div class="rows">${list.map(assignRow).join('')}</div>` : `<div class="empty"><h3>No assignments match these filters</h3><p>Widen the date range or clear a filter.</p></div>`}
+    <h2 class="subhead">${f.pub ? `History for ${esc(pname(f.pub))}` : 'Fairness overview'}</h2>
+    ${f.pub ? historyForPublisher(f.pub) : fairnessTable()}
+  </div>`;
+}
+
+/* Per-publisher: last time they handled each assignment type. Based only on saved records. */
+function historyForPublisher(pid){
+  const p = pub(pid); if (!p) return '';
+  const t = todayISO();
+  const mine = allAssignments().filter(a => a.pid === pid);
+  const types = Array.from(new Set([...p.categories, ...mine.map(a => a.type)])).filter(Boolean);
+  if (!types.length) return '<p class="muted">No eligibility or assignments recorded.</p>';
+  const rows = types.map(ty => {
+    const done = mine.filter(a => a.type === ty && a.date < t);
+    const next = mine.find(a => a.type === ty && a.date >= t);
+    return `<tr><td>${esc(catName(ty))}${p.categories.includes(ty) ? '' : ' <span class="chip warn">not eligible</span>'}</td>
+      <td>${done.length ? esc(fmtShort(done[done.length - 1].date)) : '<span class="muted">Never</span>'}</td>
+      <td>${done.length}</td><td>${next ? esc(fmtShort(next.date)) : '—'}</td></tr>`;
+  }).join('');
+  return `<div class="scroll-x"><table class="tbl"><thead><tr><th>Assignment type</th><th>Last handled</th><th>Times</th><th>Next</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="font-size:13px">Counts come only from meetings saved in this app.</p>`;
+}
+
+function fairnessTable(){
+  if (!state.publishers.length) return '<p class="muted">Add publishers to see the overview.</p>';
+  const t = todayISO(), since = toISO(addDays(new Date(), -91));
+  const all = allAssignments();
+  const rows = state.publishers.map(p => {
+    const mine = all.filter(a => a.pid === p.id);
+    const past = mine.filter(a => a.date < t);
+    return {p, last:past.length ? past[past.length - 1].date : '', recent:past.filter(a => a.date >= since).length, upcoming:mine.filter(a => a.date >= t).length};
+  }).sort((a, b) => (a.last || '').localeCompare(b.last || '') || a.p.name.localeCompare(b.p.name));
+  return `<p class="muted" style="font-size:14px;margin-top:0">Sorted by who has gone longest without an assignment. Select a publisher in the filter above to see their history by type.</p>
+  <div class="scroll-x"><table class="tbl"><thead><tr><th>Publisher</th><th>Last assignment</th><th>Last 13 weeks</th><th>Upcoming</th></tr></thead><tbody>
+  ${rows.map(r => `<tr><td><button class="btn ghost sm" style="padding:0;min-height:0;font-weight:600" data-action="pfPub" data-id="${r.p.id}">${esc(r.p.name)}</button></td>
+    <td>${r.last ? esc(fmtShort(r.last)) : '<span class="muted">None</span>'}</td><td>${r.recent}</td><td>${r.upcoming}</td></tr>`).join('')}
+  </tbody></table></div>`;
+}
+
+/* ---------- Settings ---------- */
+function viewSettings(){
+  const s = state.settings;
+  const dayOpts = sel => DAYS.map((d, i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>${d}</option>`).join('');
+  const hasPrev = (() => { try { return !!localStorage.getItem(PREV_KEY); } catch (e) { return false; } })();
+  return `<div class="wrap" style="padding-top:14px">
+  <h2 class="subhead" style="margin-top:8px">Congregation</h2>
+  <div class="grid2">
+    <label class="field"><span>Congregation name</span><input class="input" data-set="congName" value="${esc(s.congName)}" maxlength="80"></label>
+    <label class="field"><span>Initials for the logo (up to 4 letters)</span><input class="input" data-set="logoText" value="${esc(s.logoText)}" maxlength="4" placeholder="Auto from name"></label>
+  </div>
+  <div class="btnrow" style="margin-top:12px"><span class="logo" style="width:44px;height:44px">${s.logoImage ? `<img src="${s.logoImage}" alt="Logo">` : esc(s.logoText || s.congName.split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase())}</span>
+    <button class="btn" data-action="logoPick">${ICON.upload}Choose logo image</button>
+    ${s.logoImage ? `<button class="btn danger" data-action="logoRemove">Remove image</button>` : ''}</div>
+
+  <h2 class="subhead">Meeting defaults</h2>
+  <div class="grid2">
+    <label class="field"><span>Meeting day</span><select class="input" data-set="meetingDay">${dayOpts(s.meetingDay)}</select></label>
+    <label class="field"><span>Meeting time</span><input class="input" type="time" data-set="meetingTime" value="${esc(s.meetingTime)}"></label>
+    <label class="field"><span>Meeting length (minutes)</span><input class="input" type="number" inputmode="numeric" min="10" max="300" data-set="duration" value="${s.duration}"></label>
+    <label class="field"><span>Week starts on</span><select class="input" data-set="weekStart">${dayOpts(s.weekStart)}</select></label>
+  </div>
+  <label class="check" style="margin-top:10px"><input type="checkbox" data-set="secondHallDefault" ${s.secondHallDefault ? 'checked' : ''}> Use a second hall for new meetings</label>
+
+  <h2 class="subhead">Appearance</h2>
+  <div class="seg" style="max-width:420px">${[['light','Light'],['dark','Dark'],['auto','Match device']].map(([v, l]) => `<button class="${s.theme === v ? 'on' : ''}" data-action="theme" data-v="${v}">${l}</button>`).join('')}</div>
+
+  <h2 class="subhead">Default meeting parts</h2>
+  <p class="muted" style="margin-top:0">New meetings start with these parts. Change them whenever the workbook arrangement changes; existing meetings are not affected. Parts with type “Chairman” are shown as unnumbered remarks.</p>
+  <div id="tplList">${templateHTML()}</div>
+  <div class="btnrow" style="margin-top:10px"><button class="btn" data-action="tplAdd">${ICON.plus}Add part</button>
+    <button class="btn" data-action="tplReset">Restore original parts</button></div>
+
+  <h2 class="subhead">Assignment categories</h2>
+  <p class="muted" style="margin-top:0">These are the assignment types used for eligibility and history. Rename or add your own. Chairman, Prayer, Student Assistant and the Bible study roles are used by the app and can be renamed but not removed.</p>
+  <div class="rows">${s.categories.map((c, i) => `<div class="row"><input class="input" data-cat="${i}" value="${esc(c.name)}" aria-label="Category name" maxlength="60" style="flex:1">
+    ${CORE_CATS.includes(c.id) ? '<span class="chip" title="Used by the app">Built in</span>' : `<button class="btn icon sm ghost" data-action="catDel" data-i="${i}" aria-label="Remove ${esc(c.name)}">${ICON.trash}</button>`}</div>`).join('')}</div>
+  <div class="btnrow" style="margin-top:10px"><input class="input" id="newCat" placeholder="New category name" maxlength="60" style="flex:1;min-width:180px"><button class="btn" data-action="catAdd">${ICON.plus}Add category</button></div>
+
+  <h2 class="subhead">Backup &amp; data</h2>
+  <p class="muted" style="margin-top:0">Last backup: <b>${s.lastBackup ? esc(new Date(s.lastBackup).toLocaleString()) : 'never'}</b>. ${state.meetings.length} meetings and ${state.publishers.length} publishers on this device.</p>
+  <div class="btnrow">
+    <button class="btn primary" data-action="exportJSON">${ICON.download}Export backup (.json)</button>
+    ${navigator.share ? `<button class="btn" data-action="shareJSON">${ICON.share}Share backup file</button>` : ''}
+    <button class="btn" data-action="importJSON">${ICON.upload}Import backup</button>
+    <button class="btn" data-action="exportCSV">${ICON.download}Export schedule (.csv)</button>
+  </div>
+  <div class="btnrow" style="margin-top:10px">
+    ${hasPrev ? `<button class="btn" data-action="restorePrev">Undo last import or reset</button>` : ''}
+    <button class="btn danger" data-action="resetSample">Reset everything</button>
+    <button class="btn danger" data-action="clearAll">Erase meetings &amp; publishers</button>
+  </div>
+
+  <h2 class="subhead">About storage</h2>
+  <div class="notice ${storageOK ? 'ok' : 'conflict'}"><p><b>${storageOK ? 'Saving works in this browser.' : 'Saving is blocked in this browser.'}</b> Data is stored with the browser’s localStorage on this device only. Nothing is sent anywhere.</p></div>
+  <ul style="padding-left:20px;color:var(--text)">
+    <li>Each browser keeps its own copy. Data in Safari is not visible in Chrome, and data on your Mac is not on your iPhone. Use Export / Import to move it.</li>
+    <li>Clearing website data or history in the browser erases it. Private browsing may not keep it at all.</li>
+    <li>Safari can delete data for sites you haven’t opened in about 7 days. Adding the app to the Home Screen avoids this, but keep exporting backups anyway.</li>
+    <li>On iPhone, opening the file from the Files app shows a preview that cannot save. Use a hosted copy (see the instructions that came with this file).</li>
+  </ul>
+  </div>`;
+}
+
+function templateHTML(){
+  const t = state.settings.template;
+  if (!t.length) return '<p class="muted">No default parts. New meetings will start empty.</p>';
+  return t.map((p, i) => `<div class="tplrow">
+    <label class="field"><span>Section</span><select class="input" data-tpl="section" data-i="${i}">${SECTIONS.map(s => `<option value="${s.id}" ${s.id === p.section ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
+    <label class="field"><span>Part title</span><input class="input" data-tpl="title" data-i="${i}" value="${esc(p.title)}" maxlength="120"></label>
+    <label class="field"><span>Type</span><select class="input" data-tpl="type" data-i="${i}">${typeOptions(p.type)}</select></label>
+    <label class="field"><span>Format</span><select class="input" data-tpl="format" data-i="${i}">${formatOptions(p.format)}</select></label>
+    <label class="field"><span>Min.</span><input class="input" type="number" inputmode="numeric" min="0" max="180" data-tpl="duration" data-i="${i}" value="${p.duration}"></label>
+    <div class="btnrow wide" style="align-self:end"><button class="btn icon sm" data-action="tplMove" data-i="${i}" data-dir="-1" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${ICON.up}</button>
+      <button class="btn icon sm" data-action="tplMove" data-i="${i}" data-dir="1" aria-label="Move down" ${i === t.length - 1 ? 'disabled' : ''}>${ICON.down}</button>
+      <button class="btn icon sm danger" data-action="tplDel" data-i="${i}" aria-label="Remove part">${ICON.x}</button></div>
+  </div>`).join('');
+}
+const typeOptions = sel => `<option value="">(none)</option>` + state.settings.categories.map(c => `<option value="${c.id}" ${c.id === sel ? 'selected' : ''}>${esc(c.name)}</option>`).join('')
+  + (sel && !state.settings.categories.some(c => c.id === sel) ? `<option value="${esc(sel)}" selected>${esc(sel)} (removed)</option>` : '');
+const formatOptions = sel => `<option value="">(none)</option>` + FORMATS.concat(sel && !FORMATS.includes(sel) ? [sel] : []).map(f => `<option ${f === sel ? 'selected' : ''}>${esc(f)}</option>`).join('');
+
+/* =====================================================================
+   3.7 EDITORS (layers, meeting editor, publisher editor)
+   ===================================================================== */
+const layers = [];
+/* Open a modal layer. onDismiss runs on backdrop tap or Escape. */
+function openLayer(html, onDismiss){
+  const el = document.createElement('div');
+  el.className = 'layer';
+  el.innerHTML = html;
+  el._dismiss = onDismiss || (() => closeLayer(el));
+  el.addEventListener('pointerdown', e => { el._down = e.target === el; });
+  el.addEventListener('click', e => { if (e.target === el && el._down) el._dismiss(); });
+  $('#modalRoot').appendChild(el);
+  layers.push(el);
+  document.body.classList.add('modal-open');
+  return el;
+}
+function closeLayer(el){
+  const i = layers.indexOf(el); if (i >= 0) layers.splice(i, 1);
+  el.remove();
+  if (!layers.length) document.body.classList.remove('modal-open');
+}
+/* Promise-based dialog. buttons: [{label, value, cls}] ; message is HTML (escape inputs!). */
+function dialog({title, message, buttons}){
+  buttons = buttons || [{label:'OK', value:true, cls:'primary'}];
+  return new Promise(res => {
+    let layer;
+    layer = openLayer(`<div class="modal dialog" role="alertdialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="modal-body"><h3>${esc(title)}</h3><div class="dmsg">${message}</div></div>
+      <div class="modal-foot">${buttons.map((b, i) => `<button class="btn ${b.cls || ''}" data-di="${i}">${esc(b.label)}</button>`).join('')}</div></div>`,
+      () => { closeLayer(layer); res(false); });
+    layer.addEventListener('click', e => { const b = e.target.closest('[data-di]'); if (b){ closeLayer(layer); res(buttons[+b.dataset.di].value); } });
+    const last = layer.querySelector('[data-di]:last-child'); if (last) last.focus();
+  });
+}
+const confirmDanger = (title, message, okLabel) => dialog({title, message, buttons:[{label:'Cancel', value:false}, {label:okLabel, value:true, cls:'danger solid'}]});
+
+/* ---------- Meeting editor ---------- */
+let ed = null; // {draft, orig, isNew, showAll, layer, lastMap}
+
+function newMeetingDraft(date){
+  const s = state.settings;
+  if (!date){
+    // next meeting day after the last scheduled meeting, or this week's
+    const t = todayISO();
+    const later = sortedMeetings().filter(m => m.date >= t);
+    let base = later.length ? addDays(parseISO(later[later.length - 1].date), 1) : parseISO(t);
+    while (base.getDay() !== s.meetingDay) base = addDays(base, 1);
+    date = toISO(base);
+  }
+  return {id:uid(), date, weekLabel:'', reading:'', time:'', chairman:'', openingPrayer:'', closingPrayer:'',
+    secondHall:!!s.secondHallDefault, hall2Counselor:'',
+    songs:{opening:'', middle:'', closing:''}, notes:'', parts:clone(s.template).map(p => mergeMinistry({...p, id:uid(), assignee:'', assistant:'', hall2Assignee:'', hall2Assistant:''}))};
+}
+
+function openEditor(meeting, isNew){
+  ed = {draft:clone(meeting), orig:JSON.stringify(meeting), isNew, showAll:false};
+  ed.layer = openLayer(`<div class="modal full" role="dialog" aria-modal="true" aria-label="${isNew ? 'New meeting' : 'Edit meeting'}">
+    <div class="modal-head"><button class="btn ghost" data-action="edCancel">Cancel</button><h2>${isNew ? 'New meeting' : 'Edit meeting'}</h2><button class="btn primary" data-action="edSave">Save</button></div>
+    <div class="modal-body" id="edBody"></div></div>`, () => edCancel());
+  renderEditorBody();
+}
+
+function renderEditorBody(){
+  const b = $('#edBody'); if (!b) return;
+  const st = b.scrollTop;
+  ed.lastMap = buildLastMap(ed.draft.date, ed.draft.id);
+  b.innerHTML = editorHTML();
+  b.scrollTop = st;
+}
+
+/* Publisher <option>s for a role. Eligible publishers first, sorted by
+   who has waited longest for that type; ineligible ones only when
+   "show everyone" is on (or already selected). Nothing is auto-assigned. */
+function pubOptions(selected, cat, brothersOnly, allowNone, allowChair){
+  const lm = ed ? ed.lastMap : {};
+  // Living as Christians parts: sisters are never listed
+  const list = state.publishers.filter(p => !brothersOnly || p.gender !== 'F' || p.id === selected).sort(byName);
+  const label = (p, warn) => {
+    const last = cat ? lm[p.id + '|' + cat] : lm[p.id];
+    const info = last ? ` — last ${fmtMD(last)}` : ' — never';
+    return `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}${warn ? ' (not marked eligible)' : ''}${info}</option>`;
+  };
+  const elig = cat ? list.filter(p => p.categories.includes(cat)) : list;
+  elig.sort((a, b) => (lm[a.id + '|' + cat] || '').localeCompare(lm[b.id + '|' + cat] || '') || a.name.localeCompare(b.name));
+  let out = '<option value="">— Unassigned —</option>'
+    + (allowChair ? `<option value="${CHAIR}" ${selected === CHAIR ? 'selected' : ''}>Chairman</option>` : '')
+    + (allowNone ? `<option value="${NONE}" ${selected === NONE ? 'selected' : ''}>Not needed</option>` : '')
+    + elig.map(p => label(p)).join('');
+  if (cat){
+    const others = list.filter(p => !p.categories.includes(cat) && (ed.showAll || p.id === selected));
+    if (others.length) out += `<optgroup label="Not marked eligible">${others.map(p => label(p, true)).join('')}</optgroup>`;
+  }
+  if (selected && selected !== NONE && selected !== CHAIR && !pub(selected)) out += `<option value="${esc(selected)}" selected>${esc(pname(selected))}</option>`;
+  return out;
+}
+
+/* ---- Part cards in the meeting editor ----
+   Details on the left, assigned publishers on the right.
+   - Opening/Closing Remarks: fixed, no edit controls (given by the chairman)
+   - Treasures: fixed length; edit title, publisher, notes
+   - Ministry: setting, minutes, theme, counsel point / material
+   - Living as Christians: brothers only; minutes and notes */
+function remarkCardHTML(p){
+  return `<div class="pcard fixed"><b>${esc(p.title)}</b> <span class="muted">(${p.duration} min.) · Given by the chairman</span></div>`;
+}
+const inputField = (p, f, label, ph = '') => `<label class="field"><span>${label}</span><input class="input" data-ped="${f}" data-pid="${p.id}" value="${esc(p[f])}" placeholder="${esc(ph)}" maxlength="300"></label>`;
+const fieldMinutes = p => `<label class="field"><span>Minutes</span><input class="input" type="number" inputmode="numeric" min="0" max="180" data-ped="duration" data-pid="${p.id}" value="${p.duration}"></label>`;
+function partCardHTML(p, sec, num, movable){
+  const i = movable.indexOf(p);
+  const brothers = sec === 'living';
+  const h2on = usesHall2(ed.draft, p);
+  const controls = sec === 'treasures' ? '' : `
+    <button class="btn icon sm" data-action="edMove" data-pid="${p.id}" data-dir="-1" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${ICON.up}</button>
+    <button class="btn icon sm" data-action="edMove" data-pid="${p.id}" data-dir="1" aria-label="Move down" ${i === movable.length - 1 ? 'disabled' : ''}>${ICON.down}</button>
+    <button class="btn icon sm danger" data-action="edDelPart" data-pid="${p.id}" aria-label="Remove part">${ICON.x}</button>`;
+
+  // Left column: part details
+  let left;
+  if (sec === 'treasures'){
+    // The talk and Espirituwal nga mga Bahandi have no notes field
+    left = `<div class="field"><span>Length</span><div class="fixedval">${p.duration} min.</div></div>`
+      + (['treasures', 'gems'].includes(p.type) ? '' : inputField(p, 'notes', 'Notes / material'));
+  } else if (sec === 'ministry'){
+    left = fieldMinutes(p)
+      + `<label class="field"><span>Setting, theme &amp; counsel point</span><textarea class="input details" data-ped="theme" data-pid="${p.id}" maxlength="400"
+          placeholder="e.g. PAGPAMALAYBALAY. … (lmd leksiyon 7 punto 4)">${esc(p.theme)}</textarea></label>
+         <div class="muted" style="font-size:12px;line-height:1.3">Start with “PAKIGPULONG.” for a talk (no assistant).</div>`;
+  } else {
+    left = fieldMinutes(p) + inputField(p, 'notes', 'Notes / material');
+  }
+
+  // Right column: assigned publishers
+  const showAsst = needsAssistant(p) || p.assistant;
+  const sel = (f, cat, label, onlyBrothers) => `<label class="field"><span>${label}</span><select class="input" data-ped="${f}" data-pid="${p.id}">${pubOptions(p[f], cat, onlyBrothers, true)}</select></label>`;
+  const mainSel = sel('assignee', p.type, h2on ? 'Assigned to' : (brothers ? 'Assigned to (brothers)' : 'Assigned to'), brothers)
+    + (showAsst ? sel('assistant', asstCat(p), asstLabel(p), brothers) : '');
+  let right = mainSel;
+  if (h2on){
+    // Each hall in its own colored group with a bold colored title
+    right = `<div class="hallgrp main"><b class="hall-t">Main hall</b>${mainSel}</div>
+      <div class="hallgrp second"><b class="hall-t">Second hall</b>${sel('hall2Assignee', p.type, 'Assigned to')}
+      ${showAsst || p.hall2Assistant ? sel('hall2Assistant', asstCat(p), asstLabel(p)) : ''}</div>`;
+  }
+  return `<div class="pcard s-${sec}">
+    <div class="phead"><span class="num">${num}.</span>
+      ${['gems', 'reading'].includes(p.type) && sec === 'treasures'
+        ? `<div class="fixedtitle">${esc(p.title)}</div>`   /* fixed titles: Espirituwal nga mga Bahandi, Pagbasa sa Bibliya */
+        : `<input class="input" data-ped="title" data-pid="${p.id}" value="${esc(p.title)}" aria-label="Part title" maxlength="120">`}${controls}
+    </div>
+    <div class="pcols"><div class="lcol">${left}</div><div class="rcol">${right}</div></div></div>`;
+}
+
+/* Congregation Bible Study card: fixed title and length, an on/off switch,
+   and only notes, conductor and reader editable. */
+function cbsCardHTML(p, num){
+  const sw = `<label class="switch" title="Include this part"><input type="checkbox" data-ped="active" data-pid="${p.id}" ${p.off ? '' : 'checked'}><span></span></label>`;
+  const head = `<div class="phead"><span class="num">${num ? num + '.' : ''}</span><div class="fixedtitle">${esc(p.title)}</div>${sw}</div>`;
+  if (p.off) return `<div class="pcard s-living off">${head}<p class="muted" style="margin:0;font-size:14px">Switched off — not on the schedule this week.</p></div>`;
+  const sel = (f, cat, label) => `<label class="field"><span>${label}</span><select class="input" data-ped="${f}" data-pid="${p.id}">${pubOptions(p[f], cat, true, true)}</select></label>`;
+  return `<div class="pcard s-living">${head}
+    <div class="pcols">
+      <div class="lcol"><div class="field"><span>Length</span><div class="fixedval">${p.duration} min.</div></div>${inputField(p, 'notes', 'Notes / material')}</div>
+      <div class="rcol">${sel('assignee', 'cbs', 'Conductor')}${sel('assistant', 'cbsreader', 'Reader')}</div>
+    </div></div>`;
+}
+
+/* Second hall (auxiliary classroom) panel at the top of the editor. */
+function hall2PanelHTML(d){
+  if (!d.secondHall) return `<div class="panel hall2-panel" style="margin-top:14px">
+    <div class="btnrow" style="justify-content:space-between">
+      <div><b>Second hall</b><div class="muted" style="font-size:14px">Not used this week</div></div>
+      <button class="btn primary" data-action="edHall2" data-on="1">${ICON.plus}Add second hall</button>
+    </div></div>`;
+  return `<div class="panel hall2-panel on" style="margin-top:14px">
+    <div class="btnrow" style="justify-content:space-between">
+      <div><b>Second hall is on</b><div class="muted" style="font-size:14px">Assign second-hall students in the Bible reading and field ministry parts below.</div></div>
+      <button class="btn danger sm" data-action="edHall2" data-on="0">Remove second hall</button>
+    </div>
+    <label class="field" style="margin-top:10px"><span>Second hall counselor</span><select class="input" data-ed="hall2Counselor">${pubOptions(d.hall2Counselor, 'counselor', true)}</select></label>
+  </div>`;
+}
+function editorHTML(){
+  const d = ed.draft;
+  const total = activeParts(d.parts).reduce((t, p) => t + (p.duration || 0), 0);
+  let n = 0;
+  const secs = SECTIONS.map(sec => {
+    const parts = d.parts.filter(p => p.section === sec.id);
+    const movable = parts.filter(p => !isFixed(p));   // remarks and the Bible study never move
+    const h2btn = sec.id === 'ministry' && !d.secondHall
+      ? `<button class="btn sm" data-action="edHall2" data-on="1" style="margin-bottom:12px">${ICON.plus}Add second hall students</button>` : '';
+    return `<div class="ed-sec">${secHead(sec)}${h2btn}
+      ${parts.map(p => isRemarks(p) ? remarkCardHTML(p) : (isCBS(p) ? cbsCardHTML(p, p.off ? 0 : ++n) : partCardHTML(p, sec.id, ++n, movable))).join('') || '<p class="empty-sec" style="margin-left:0">No parts yet.</p>'}
+      ${sec.id === 'treasures' ? '' : `<button class="btn" data-action="edAddPart" data-sec="${sec.id}">${ICON.plus}Add part</button>`}</div>`;
+  }).join('');
+
+  return `
+  <div class="grid2">
+    <label class="field"><span>Meeting date *</span><input class="input" type="date" data-ed="date" value="${esc(d.date)}" required></label>
+    <label class="field"><span>Start time (blank = ${esc(fmtTime(state.settings.meetingTime))})</span><input class="input" type="time" data-ed="time" value="${esc(d.time)}"></label>
+    <label class="field"><span>Week label</span><input class="input" data-ed="weekLabel" value="${esc(d.weekLabel)}" placeholder="${esc(parseISO(d.date) ? fmtRange(weekStartOf(parseISO(d.date))) : 'e.g. October 12–18')}" maxlength="60"></label>
+    <label class="field"><span>Bible reading</span><input class="input" data-ed="reading" value="${esc(d.reading)}" placeholder="From the workbook" maxlength="100"></label>
+  </div>
+  ${hall2PanelHTML(d)}
+  <div class="grid3 songs" style="margin-top:12px">
+    <label class="field"><span>Opening song</span><input class="input" type="number" inputmode="numeric" min="1" max="999" data-ed="song.opening" value="${d.songs.opening}"></label>
+    <label class="field"><span>Middle song</span><input class="input" type="number" inputmode="numeric" min="1" max="999" data-ed="song.middle" value="${d.songs.middle}"></label>
+    <label class="field"><span>Closing song</span><input class="input" type="number" inputmode="numeric" min="1" max="999" data-ed="song.closing" value="${d.songs.closing}"></label>
+  </div>
+  <div class="grid3 roles" style="margin-top:12px">
+    <label class="field"><span>Chairman</span><select class="input" data-ed="chairman">${pubOptions(d.chairman, 'chairman')}</select></label>
+    <label class="field"><span>Opening prayer</span><select class="input" data-ed="openingPrayer">${pubOptions(d.openingPrayer, 'prayer', false, false, true)}</select></label>
+    <label class="field"><span>Closing prayer</span><select class="input" data-ed="closingPrayer">${pubOptions(d.closingPrayer, 'prayer', false, false, true)}</select></label>
+  </div>
+  <label class="field" style="margin-top:12px"><span>Notes or special instructions</span><textarea class="input" data-ed="notes" maxlength="2000">${esc(d.notes)}</textarea></label>
+  <div class="btnrow" style="margin-top:10px;justify-content:space-between">
+    <label class="check"><input type="checkbox" data-action="edShowAll" ${ed.showAll ? 'checked' : ''}> Show publishers not marked eligible</label>
+    <span class="muted" id="edTotal">Parts total ${total} min.</span>
+  </div>
+  <p class="muted" style="font-size:13px;margin:4px 0 0">Lists show eligible publishers first, longest-waiting at the top, with the date they last had that assignment.</p>
+  <div id="edWarn" style="margin-top:12px">${warningsHTML(meetingWarnings(d), d)}</div>
+  ${secs}
+  <div class="btnrow" style="margin-top:24px"><button class="btn" data-action="edApplyTemplate">Replace parts with default template</button></div>`;
+}
+
+function updateEdLive(){
+  const w = $('#edWarn'); if (w) w.innerHTML = warningsHTML(meetingWarnings(ed.draft), ed.draft);
+  const t = $('#edTotal'); if (t) t.textContent = `Parts total ${activeParts(ed.draft.parts).reduce((s, p) => s + (p.duration || 0), 0)} min.`;
+}
+
+/* Field edits inside the editor. Structural changes re-render the body. */
+/* The Type field is no longer shown for ministry parts. The assignment
+   type (used for eligibility and history) is worked out from the part
+   title, e.g. "Following Up" -> "Following Up (Return Visit)". */
+function ministryTypeFor(p){
+  const t = p.title.trim().toLowerCase();
+  const skip = ['chairman','prayer','assistant','cbs','cbsreader','counselor','treasures','gems','reading','living','localneeds'];
+  const hit = t && state.settings.categories.find(c => {
+    if (skip.includes(c.id)) return false;
+    const n = c.name.toLowerCase(), base = n.replace(/\s*\(.*\)\s*$/, '');
+    return n === t || base === t || t.includes(base) || (t.length >= 6 && base.startsWith(t));
+  });
+  if (hit) return hit.id;
+  if (isTalk(p)) return 'studenttalk';
+  return skip.includes(p.type) ? '' : p.type;
+}
+function onEditorField(t, isChange){
+  const d = ed.draft;
+  if (t.dataset.ed !== undefined){
+    const f = t.dataset.ed;
+    if (f.startsWith('song.')) d.songs[f.slice(5)] = songVal(t.value);
+    else if (t.type === 'checkbox') d[f] = t.checked;
+    else d[f] = t.value;
+    if ((f === 'date' && isChange && parseISO(t.value)) || (f === 'secondHall' && isChange)) renderEditorBody(); else updateEdLive();
+    return;
+  }
+  const p = d.parts.find(x => x.id === t.dataset.pid); if (!p) return;
+  const f = t.dataset.ped;
+  if (f === 'active'){ p.off = !t.checked; if (isChange) renderEditorBody(); return; }
+  p[f] = f === 'duration' ? int(t.value, 0, 180, 0) : t.value;
+  if (p.section === 'ministry' && (f === 'title' || f === 'theme')) p.type = ministryTypeFor(p);
+  if (p.section === 'ministry' && f === 'theme' && isChange){
+    // A talk has no householder/assistant: clear any that were set.
+    if (!needsAssistant(p) && (p.assistant || p.hall2Assistant)){ p.assistant = ''; p.hall2Assistant = ''; toast('Assistant removed — a talk has no assistant'); }
+    // Show/hide the assistant fields only if that actually changed
+    const card = t.closest('.pcard');
+    if (card && !!card.querySelector('[data-ped=assistant]') !== needsAssistant(p)) renderEditorBody();
+  }
+  if (isChange && ['type', 'format', 'section'].includes(f)){
+    if (f === 'section'){ d.parts = d.parts.filter(x => x !== p).concat([p]); d.parts = orderedParts(d.parts); }
+    renderEditorBody();
+  } else updateEdLive();
+}
+
+async function edSave(){
+  const d = ed.draft;
+  if (!parseISO(d.date)) return toast('Enter a valid meeting date before saving.', 'error');
+  if (d.parts.some(p => !p.title.trim())) return toast('Every part needs a title.', 'error');
+  if (state.meetings.some(m => m.id !== d.id && m.date === d.date)){
+    const ok = await dialog({title:'Date already used', message:`<p>Another meeting is already scheduled on ${esc(fmtLong(d.date))}. Save anyway?</p>`,
+      buttons:[{label:'Go back', value:false}, {label:'Save anyway', value:true, cls:'primary'}]});
+    if (!ok) return;
+  }
+  d.parts = orderedParts(d.parts).map(p => ({...p, title:p.title.trim()}));
+  if (!d.secondHall){ d.hall2Counselor = ''; d.parts.forEach(p => { p.hall2Assignee = ''; p.hall2Assistant = ''; }); }
+  const i = state.meetings.findIndex(m => m.id === d.id);
+  if (i >= 0) state.meetings[i] = clone(d); else state.meetings.push(clone(d));
+  save(ed.isNew ? 'Meeting added' : 'Meeting saved');
+  ui.weekCursor = toISO(weekStartOf(parseISO(d.date)));
+  closeLayer(ed.layer); ed = null;
+  render();
+}
+async function edCancel(){
+  if (!ed) return;
+  if (JSON.stringify(ed.draft) !== ed.orig){
+    const ok = await dialog({title:'Discard changes?', message:'<p>Your changes to this meeting have not been saved.</p>',
+      buttons:[{label:'Keep editing', value:false}, {label:'Discard', value:true, cls:'danger solid'}]});
+    if (!ok) return;
+  }
+  closeLayer(ed.layer); ed = null;
+}
+
+/* ---------- Publisher editor ---------- */
+function openPubEditor(p){
+  const isNew = !p;
+  p = p ? clone(p) : {id:uid(), name:'', gender:'', categories:[], notes:''};
+  const t = todayISO();
+  const hist = allAssignments().filter(a => a.pid === p.id);
+  const cats = state.settings.categories.map(c => `<label class="check"><input type="checkbox" name="pcat" value="${c.id}" ${p.categories.includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('');
+  let layer;
+  const html = `<div class="modal" role="dialog" aria-modal="true" aria-label="${isNew ? 'Add publisher' : 'Edit publisher'}">
+    <div class="modal-head"><button class="btn ghost" data-pe="cancel">Cancel</button><h2>${isNew ? 'Add publisher' : 'Edit publisher'}</h2><button class="btn primary" data-pe="save">Save</button></div>
+    <div class="modal-body">
+      <div class="grid2">
+        <label class="field"><span>Full name *</span><input class="input" id="pe-name" value="${esc(p.name)}" maxlength="80" autocomplete="off"></label>
+        <label class="field"><span>Brother or sister (optional, for pairing)</span><select class="input" id="pe-gender">
+          <option value="">Not specified</option><option value="M" ${p.gender === 'M' ? 'selected' : ''}>Brother</option><option value="F" ${p.gender === 'F' ? 'selected' : ''}>Sister</option></select></label>
+      </div>
+      <h3 style="margin-top:18px">Eligible for</h3>
+      <p class="muted" style="margin:0 0 6px;font-size:14px">Only tick what this publisher may be assigned. Nothing is assumed.</p>
+      <div class="btnrow" style="margin-bottom:4px"><button class="btn sm" data-pe="all">Select all</button><button class="btn sm" data-pe="none">Clear</button></div>
+      <div class="grid2" style="gap:0 12px">${cats}</div>
+      <label class="field" style="margin-top:14px"><span>Notes (optional)</span><textarea class="input" id="pe-notes" maxlength="500">${esc(p.notes)}</textarea></label>
+      ${isNew ? '' : `<h3 style="margin-top:20px">Assignments on record</h3>${hist.length ? `<div class="rows">${hist.slice().reverse().map(a => `<div class="row"><div class="main"><div class="title" style="font-weight:600">${esc(a.label)}</div><div class="sub">${esc(fmtShort(a.date))}${a.date >= t ? ' · upcoming' : ''}</div></div></div>`).join('')}</div>` : '<p class="muted">None yet.</p>'}`}
+    </div></div>`;
+  const orig = JSON.stringify(p);
+  const collect = () => ({...p, name:$('#pe-name', layer).value.trim(), gender:$('#pe-gender', layer).value,
+    categories:[...layer.querySelectorAll('input[name=pcat]:checked')].map(x => x.value), notes:$('#pe-notes', layer).value.trim()});
+  const cancel = async () => {
+    if (JSON.stringify(collect()) !== orig && !(await dialog({title:'Discard changes?', message:'<p>This publisher has unsaved changes.</p>', buttons:[{label:'Keep editing', value:false}, {label:'Discard', value:true, cls:'danger solid'}]}))) return;
+    closeLayer(layer);
+  };
+  layer = openLayer(html, cancel);
+  layer.addEventListener('click', async e => {
+    const b = e.target.closest('[data-pe]'); if (!b) return;
+    const a = b.dataset.pe;
+    if (a === 'cancel') return cancel();
+    if (a === 'all' || a === 'none') return layer.querySelectorAll('input[name=pcat]').forEach(x => { x.checked = a === 'all'; });
+    if (a === 'save'){
+      const np = collect();
+      if (!np.name){ toast('Enter the publisher’s name.', 'error'); $('#pe-name', layer).focus(); return; }
+      if (state.publishers.some(x => x.id !== np.id && x.name.toLowerCase() === np.name.toLowerCase())){
+        const ok = await dialog({title:'Name already in the directory', message:`<p>${esc(np.name)} is already listed. Save a second record with the same name?</p>`, buttons:[{label:'Go back', value:false}, {label:'Save anyway', value:true, cls:'primary'}]});
+        if (!ok) return;
+      }
+      const i = state.publishers.findIndex(x => x.id === np.id);
+      if (i >= 0) state.publishers[i] = np; else state.publishers.push(np);
+      save(isNew ? 'Publisher added' : 'Publisher saved');
+      closeLayer(layer); render();
+    }
+  });
+  setTimeout(() => { if (isNew && matchMedia('(pointer:fine)').matches) $('#pe-name', layer).focus(); }, 30);
+}
+
+async function deletePublisher(id){
+  const p = pub(id); if (!p) return;
+  const t = todayISO();
+  const upcoming = allAssignments().filter(a => a.pid === id && a.date >= t);
+  let msg = `<p>Remove <b>${esc(p.name)}</b> from the directory?</p>`;
+  if (upcoming.length){
+    msg += `<div class="notice conflict"><p><b>${upcoming.length} upcoming assignment${upcoming.length > 1 ? 's' : ''} will become unassigned:</b></p><ul>${upcoming.map(a => `<li>${esc(fmtShort(a.date))} — ${esc(a.label)}</li>`).join('')}</ul></div>`;
+  }
+  msg += `<p class="muted" style="margin-top:8px">Past assignments stay in the history, marked “removed”.</p>`;
+  if (!(await confirmDanger('Delete publisher?', msg, upcoming.length ? 'Delete and unassign' : 'Delete'))) return;
+  state.removed[id] = p.name;
+  state.publishers = state.publishers.filter(x => x.id !== id);
+  state.meetings.forEach(m => {
+    if (m.date < t) return;
+    ['chairman', 'openingPrayer', 'closingPrayer'].forEach(k => { if (m[k] === id) m[k] = ''; });
+    if (m.hall2Counselor === id) m.hall2Counselor = '';
+    m.parts.forEach(x => ['assignee', 'assistant', 'hall2Assignee', 'hall2Assistant'].forEach(k => { if (x[k] === id) x[k] = ''; }));
+  });
+  if (ui.pubViewId === id) ui.pubViewId = '';
+  if (ui.pf.pub === id) ui.pf.pub = '';
+  save('Publisher deleted'); render();
+}
+
+async function duplicateMeeting(id){
+  const m = state.meetings.find(x => x.id === id); if (!m) return;
+  const keep = await dialog({title:'Duplicate meeting', message:`<p>Create a copy of ${esc(weekLabel(m))} for the following free week?</p><p class="muted">Choose whether to copy the assigned names or only the parts.</p>`,
+    buttons:[{label:'Cancel', value:false}, {label:'Parts only', value:'parts'}, {label:'Parts and names', value:'all', cls:'primary'}]});
+  if (!keep) return;
+  let d = addDays(parseISO(m.date), 7);
+  while (state.meetings.some(x => x.date === toISO(d))) d = addDays(d, 7);
+  const c = clone(m);
+  c.id = uid(); c.date = toISO(d); c.weekLabel = ''; c.notes = m.notes;
+  c.parts.forEach(p => { p.id = uid(); if (keep === 'parts'){ p.assignee = ''; p.assistant = ''; p.hall2Assignee = ''; p.hall2Assistant = ''; } });
+  if (keep === 'parts') c.hall2Counselor = '';
+  if (keep === 'parts'){ c.chairman = ''; c.openingPrayer = ''; c.closingPrayer = ''; }
+  openEditor(c, true);
+  toast('Copy created — review and save it');
+}
+
+async function deleteMeeting(id){
+  const m = state.meetings.find(x => x.id === id); if (!m) return;
+  if (!(await confirmDanger('Delete meeting?', `<p>Delete the meeting for <b>${esc(weekLabel(m))}</b> (${esc(fmtLong(m.date))})? Its assignments will also disappear from the history.</p>`, 'Delete meeting'))) return;
+  state.meetings = state.meetings.filter(x => x.id !== id);
+  save('Meeting deleted'); render();
+}
+
+/* =====================================================================
+   3.8 PRINT, COPY, SHARE, EXPORT / IMPORT
+   ===================================================================== */
+function printMeetingHTML(m){
+  const info = [fmtLong(m.date), fmtTime(meetingTime(m))].map(esc).join(' · ')
+    + ` · Chairman: <b>${esc(pname(m.chairman) || '—')}</b>`
+    + (m.secondHall ? ` · Second hall counselor: <b>${esc(pname(m.hall2Counselor) || '—')}</b>` : '');
+  return `<section class="p-meet">
+    <div class="p-band"><b>${esc(weekLabel(m))}</b><span>${info}</span></div>
+    ${renderProgram(m)}
+    ${m.notes ? `<div class="p-note">Notes: ${esc(m.notes)}</div>` : ''}
+  </section>`;
+}
+function printHTML(list){
+  return `<div class="p-doc"><header class="p-top"><div class="p-cong">${esc(state.settings.congName)}</div><div class="p-title">Our Christian Life and Ministry — Meeting Schedule</div></header>
+    ${list.map(printMeetingHTML).join('')}<div class="p-foot">Printed ${esc(fmtLong(todayISO()))}</div></div>`;
+}
+function printMeetings(list){
+  if (!list.length) return toast('There is no meeting to print.', 'error');
+  $('#printArea').innerHTML = printHTML(list);
+  document.body.classList.add('printing');
+  setTimeout(() => window.print(), 60);
+}
+window.addEventListener('afterprint', () => document.body.classList.remove('printing'));
+/* If the browser's own Print command is used, print the most relevant meeting. */
+window.addEventListener('beforeprint', () => {
+  if (document.body.classList.contains('printing')) return;
+  let m = null;
+  if (ui.tab === 'schedule' && ui.schedView === 'week' && ui.weekCursor){
+    const we = toISO(addDays(parseISO(ui.weekCursor), 6));
+    m = sortedMeetings().find(x => x.date >= ui.weekCursor && x.date <= we);
+  }
+  m = m || nextMeeting();
+  $('#printArea').innerHTML = m ? printHTML([m]) : '<p>No meeting to print.</p>';
+  document.body.classList.add('printing');
+});
+
+function meetingText(m){
+  const L = [];
+  L.push(`${state.settings.congName} — Christian Life and Ministry Meeting`);
+  L.push(`${weekLabel(m)} · ${fmtLong(m.date)}, ${fmtTime(meetingTime(m))}`);
+  if (m.reading) L.push(`Bible reading: ${m.reading}`);
+  L.push(`Chairman: ${pname(m.chairman) || '—'}`);
+  if (m.secondHall) L.push(`Second hall counselor: ${pname(m.hall2Counselor) || '—'}`);
+  programRows(m).forEach(r => {
+    if (r.kind === 'song'){
+      if (!r.role){ L.push(songTxt(r.song)); return; }
+      if (r.closing) L.push('');
+      L.push(`${songTxt(r.song)} ug Pag-ampo — ${pname(r.pid) || '—'}`);
+      if (r.remark) L.push(`${r.remark.title} (${r.remark.duration} min.)`);
+    } else if (r.kind === 'section'){ L.push(''); L.push(r.sec.name.toUpperCase()); }
+    else if (r.kind === 'remark') L.push(`${r.part.title} (${r.part.duration} min.)`);
+    else {
+      const p = r.part;
+      L.push(`${r.n}. ${p.title} (${p.duration} min.)${p.section === 'ministry' && p.format ? ' ' + p.format.toUpperCase() + '.' : ''}${p.theme ? ' ' + p.theme : ''}${p.assignee === NONE ? '' : ` — ${pname(p.assignee) || '—'}`}${realId(p.assistant) ? ` / ${asstLabel(p)}: ${pname(p.assistant)}` : ''}`);
+      if (usesHall2(m, p) && p.hall2Assignee !== NONE) L.push(`   Second hall: ${pname(p.hall2Assignee) || '—'}${p.hall2Assistant ? ` / ${asstLabel(p)}: ${pname(p.hall2Assistant)}` : ''}`);
+      if (p.notes) L.push(`   ${p.notes}`);
+    }
+  });
+  if (m.notes){ L.push(''); L.push(`Notes: ${m.notes}`); }
+  return L.join('\n');
+}
+
+async function copyText(text){
+  try { if (navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); return true; } } catch (e) {}
+  // Fallback for file:// and older browsers
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+  let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+  ta.remove();
+  return ok;
+}
+function showTextForManualCopy(text){
+  dialog({title:'Copy this text', message:`<p class="muted">Automatic copying isn’t available here. Select the text and copy it.</p><textarea class="input" style="min-height:240px;font-size:14px" readonly>${esc(text)}</textarea>`});
+}
+
+function download(filename, text, mime){
+  const blob = new Blob([text], {type:mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+function backupJSON(){ return JSON.stringify({...state, exportedAt:new Date().toISOString()}, null, 2); }
+const backupName = () => `clm-backup-${todayISO()}.json`;
+function markBackedUp(){ state.settings.lastBackup = new Date().toISOString(); save(); }
+
+function csvEscape(v){ v = String(v ?? ''); return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; }
+function exportCSV(){
+  const cols = ['Date','Day','Week','Section','Order','Part','Assignment type','Format','Setting / theme / counsel point','Minutes','Participant','Assistant / Reader','Second hall participant','Second hall assistant','Counsel point / notes','Meeting notes'];
+  const lines = [cols];
+  sortedMeetings().forEach(m => {
+    const d = parseISO(m.date);
+    const row = o => cols.map(c => o[c] ?? '');
+    const base = {Date:m.date, Day:DAYS[d.getDay()], Week:weekLabel(m)};
+    lines.push(row({...base, Section:'Meeting', Part:'Chairman', 'Assignment type':catName('chairman'), Participant:pname(m.chairman), 'Meeting notes':m.notes}));
+    if (m.secondHall) lines.push(row({...base, Section:'Meeting', Part:'Second hall counselor', 'Assignment type':catName('counselor'), Participant:pname(m.hall2Counselor)}));
+    lines.push(row({...base, Section:'Meeting', Part:`Awit ${m.songs.opening || ''} ug Pag-ampo`, 'Assignment type':catName('prayer'), Participant:prayerName(m, m.openingPrayer)}));
+    orderedParts(activeParts(m.parts)).forEach((p, i) => lines.push(row({...base, Section:secName(p.section), Order:i + 1, Part:p.title,
+      'Assignment type':catName(p.type), Format:p.format, 'Setting / theme / counsel point':p.theme, Minutes:p.duration,
+      Participant:pname(p.assignee) || (isRemarks(p) ? pname(m.chairman) : ''), 'Assistant / Reader':pname(p.assistant),
+      'Second hall participant':usesHall2(m, p) ? pname(p.hall2Assignee) : '', 'Second hall assistant':usesHall2(m, p) ? pname(p.hall2Assistant) : '',
+      'Counsel point / notes':p.notes})));
+    if (m.songs.middle) lines.push(row({...base, Section:secName('living'), Part:`Awit ${m.songs.middle}`}));
+    lines.push(row({...base, Section:'Meeting', Part:`Awit ${m.songs.closing || ''} ug Pag-ampo`, 'Assignment type':catName('prayer'), Participant:prayerName(m, m.closingPrayer)}));
+  });
+  download(`clm-schedule-${todayISO()}.csv`, '\ufeff' + lines.map(r => r.map(csvEscape).join(',')).join('\r\n'), 'text/csv;charset=utf-8');
+  toast('Schedule exported as CSV');
+}
+
+function readFileText(file){
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsText(file); });
+}
+async function importBackup(file){
+  if (!file) return;
+  const fail = msg => dialog({title:'Import failed', message:`<p>${esc(msg)}</p><p class="muted">Your current data has not been changed.</p>`});
+  if (file.size > 15e6) return fail('That file is too large to be a backup from this app.');
+  let text; try { text = await readFileText(file); } catch (e) { return fail('The file could not be read.'); }
+  let raw; try { raw = JSON.parse(text); } catch (e) { return fail('This file is not a valid JSON backup. Choose a .json file exported from this app.'); }
+  let clean; try { clean = validateData(raw); } catch (e) { return fail(e.message); }
+  const when = raw.exportedAt && !isNaN(new Date(raw.exportedAt)) ? ` exported ${new Date(raw.exportedAt).toLocaleString()}` : '';
+  const ok = await confirmDanger('Replace current data?',
+    `<p>The backup${esc(when)} contains <b>${clean.meetings.length}</b> meetings and <b>${clean.publishers.length}</b> publishers for <b>${esc(clean.settings.congName)}</b>.</p>
+     <p>Importing will <b>replace</b> everything on this device (${state.meetings.length} meetings, ${state.publishers.length} publishers). A copy of the current data is kept so you can undo from Settings.</p>`, 'Replace data');
+  if (!ok) return;
+  try { localStorage.setItem(PREV_KEY, JSON.stringify(state)); } catch (e) {}
+  state = clean; applyTheme(); save('Backup imported'); render();
+}
+
+/* Shrink an uploaded logo to 128px so it fits comfortably in storage. */
+function loadLogo(file){
+  if (!file) return;
+  if (!/^image\//.test(file.type)) return toast('Choose an image file for the logo.', 'error');
+  const r = new FileReader();
+  r.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); const size = 128; c.width = c.height = size;
+      const s = Math.min(img.width, img.height);
+      c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      state.settings.logoImage = c.toDataURL('image/png'); save('Logo saved'); render();
+    };
+    img.onerror = () => toast('That image could not be read.', 'error');
+    img.src = r.result;
+  };
+  r.readAsDataURL(file);
+}
+
+function applyTheme(){
+  const t = state.settings.theme;
+  const dark = t === 'dark' || (t === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const meta = document.querySelector('meta[name=theme-color]'); if (meta) meta.content = dark ? '#17191c' : '#ffffff';
+}
+
+let toastTimer;
+function toast(msg, kind){
+  const el = $('#toast'); if (!el) return;
+  el.textContent = msg; el.className = 'show' + (kind === 'error' ? ' error' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.className = ''; }, kind === 'error' ? 4500 : 2400);
+}
+
+/* =====================================================================
+   3.9 EVENT WIRING & STARTUP
+   ===================================================================== */
+const findMeeting = id => state.meetings.find(m => m.id === id);
+const actions = {
+  nav: el => { ui.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
+  addMeeting: el => openEditor(newMeetingDraft(el.dataset.date), true),
+  edit: el => { const m = findMeeting(el.dataset.id); if (m) openEditor(m, false); },
+  duplicate: el => duplicateMeeting(el.dataset.id),
+  delMeeting: el => deleteMeeting(el.dataset.id),
+  openWeek: el => { ui.tab = 'schedule'; ui.schedView = 'week'; ui.weekCursor = toISO(weekStartOf(parseISO(el.dataset.date))); render(); window.scrollTo(0, 0); },
+  schedView: el => { ui.schedView = el.dataset.v; render(); },
+  weekPrev: () => { ui.weekCursor = toISO(addDays(parseISO(ui.weekCursor), -7)); render(); },
+  weekNext: () => { ui.weekCursor = toISO(addDays(parseISO(ui.weekCursor), 7)); render(); },
+  weekToday: () => { ui.weekCursor = toISO(weekStartOf(new Date())); render(); },
+  monthPrev: () => { const c = ui.monthCursor; const d = new Date(c.y, c.m - 1, 1); ui.monthCursor = {y:d.getFullYear(), m:d.getMonth()}; render(); },
+  monthNext: () => { const c = ui.monthCursor; const d = new Date(c.y, c.m + 1, 1); ui.monthCursor = {y:d.getFullYear(), m:d.getMonth()}; render(); },
+  monthToday: () => { ui.monthCursor = null; render(); },
+  print: el => { const m = findMeeting(el.dataset.id); if (m) printMeetings([m]); },
+  printMonth: () => { const {y, m} = ui.monthCursor; printMeetings(sortedMeetings().filter(x => { const d = parseISO(x.date); return d.getFullYear() === y && d.getMonth() === m; })); },
+  printList: () => { const t = todayISO(); printMeetings(sortedMeetings().filter(m => (ui.listPast || m.date >= t) && listMatches(m, ui.listSearch))); },
+  copyText: async el => { const m = findMeeting(el.dataset.id); if (!m) return; const txt = meetingText(m); if (await copyText(txt)) toast('Schedule copied as text'); else showTextForManualCopy(txt); },
+  share: async el => {
+    const m = findMeeting(el.dataset.id); if (!m) return; const txt = meetingText(m);
+    if (navigator.share){
+      try { await navigator.share({title:`${state.settings.congName} — ${weekLabel(m)}`, text:txt}); }
+      catch (e) { if (e && e.name !== 'AbortError') toast('Sharing failed. Use Copy text instead.', 'error'); }
+    } else if (await copyText(txt)) toast('Sharing isn’t available here, so the text was copied instead');
+    else showTextForManualCopy(txt);
+  },
+  slipWeek: el => {
+    const d = +el.dataset.dir;
+    ui.slipWeek = d === 0 ? '' : toISO(addDays(parseISO(ui.slipWeek), d * 7));
+    render();
+  },
+  slipSelAll: el => { slipWeekMeetings().flatMap(slipItems).forEach(it => el.dataset.v === '1' ? ui.slipOff.delete(it.key) : ui.slipOff.add(it.key)); render(); },
+  slipPrint: el => { const it = findSlip(el.dataset.key); if (it) printSlips([it]); },
+  slipPrintSel: () => printSlips(slipWeekMeetings().flatMap(slipItems).filter(it => !ui.slipOff.has(it.key))),
+  slipPreview: el => {
+    const it = findSlip(el.dataset.key); if (!it) return;
+    let layer;
+    layer = openLayer(`<div class="modal dialog" role="dialog" aria-modal="true" aria-label="Assignment slip">
+      <div class="modal-body"><div class="slip-preview">${slipHTML(it)}</div></div>
+      <div class="modal-foot"><button class="btn" data-close>Close</button><button class="btn primary" data-action="slipPrint" data-key="${it.key}">${ICON.print}Print</button></div></div>`);
+    layer.addEventListener('click', e => { if (e.target.closest('[data-close]') || e.target.closest('[data-action=slipPrint]')) closeLayer(layer); });
+  },
+  pubView: el => { state.settings.pubView = el.dataset.v; save(); render(); },
+  addPub: () => openPubEditor(null),
+  editPub: el => openPubEditor(pub(el.dataset.id)),
+  delPub: el => deletePublisher(el.dataset.id),
+  pfReset: () => { ui.pf = {pub:'', from:'', to:'', section:'', type:''}; render(); },
+  pfUpcoming: () => { ui.pf.from = todayISO(); ui.pf.to = ''; render(); },
+  pfPub: el => { ui.pf.pub = el.dataset.id; render(); },
+  /* editor */
+  edSave: () => edSave(),
+  edCancel: () => edCancel(),
+  jumpTo: el => {
+    const sel = el.dataset.sel, mid = el.dataset.mid;
+    if (!ed || ed.draft.id !== mid){ const m = findMeeting(mid); if (!m) return; openEditor(m, false); }
+    let target = document.querySelector('#edBody ' + sel);
+    if (!target){
+      // field hidden (e.g. switched off): fall back to the part card
+      const pid = (/data-pid="([^"]+)"/.exec(sel) || [])[1];
+      target = pid ? (document.querySelector(`#edBody [data-pid="${pid}"]`) || {}).closest?.('.pcard') : null;
+    }
+    if (!target) return toast('That field isn’t shown in the editor right now.', 'error');
+    setTimeout(() => {
+      target.scrollIntoView({block:'center', behavior:'smooth'});
+      const box = target.closest('.field') || target;
+      box.classList.remove('flash'); void box.offsetWidth; box.classList.add('flash');
+      try { target.focus({preventScroll:true}); } catch (e) {}
+    }, 60);
+  },
+  edShowAll: el => { ed.showAll = el.checked; renderEditorBody(); },
+  edHall2: async el => {
+    const d = ed.draft;
+    if (el.dataset.on === '1'){ d.secondHall = true; renderEditorBody(); toast('Second hall added — assign the students below'); return; }
+    const named = d.hall2Counselor || d.parts.some(p => p.hall2Assignee || p.hall2Assistant);
+    if (named && !(await confirmDanger('Remove second hall?', '<p>The second-hall names in this meeting will be cleared when you save.</p>', 'Remove'))) return;
+    d.secondHall = false; renderEditorBody();
+  },
+  /* From the schedule: open the editor with the second hall already switched on. */
+  addHall2: el => { const m = findMeeting(el.dataset.id); if (!m) return; openEditor(m, false); ed.draft.secondHall = true; renderEditorBody(); },
+  edAddPart: el => {
+    const sec = el.dataset.sec;
+    const np = sec === 'ministry'
+      ? {id:uid(), section:sec, title:'New part', type:'', format:'', theme:'PAGPAMALAYBALAY. ', assignee:'', assistant:'', duration:4, notes:''}
+      : {id:uid(), section:sec, title:'New part', type:'living', format:'', assignee:'', assistant:'', duration:15, notes:''};
+    const inSec = ed.draft.parts.filter(p => p.section === sec);
+    const lastP = inSec[inSec.length - 1];
+    // keep closing remarks last in the Living section
+    if (lastP && isRemarks(lastP) && inSec.length > 1) ed.draft.parts.splice(ed.draft.parts.indexOf(lastP), 0, np);
+    else ed.draft.parts.push(np);
+    ed.draft.parts = orderedParts(ed.draft.parts);
+    renderEditorBody();
+  },
+  edMove: el => {
+    const parts = ed.draft.parts, p = parts.find(x => x.id === el.dataset.pid); if (!p) return;
+    const same = parts.filter(x => x.section === p.section && !isFixed(x)); const i = same.indexOf(p), j = i + (+el.dataset.dir);
+    if (j < 0 || j >= same.length) return;
+    const a = parts.indexOf(same[i]), b = parts.indexOf(same[j]); [parts[a], parts[b]] = [parts[b], parts[a]];
+    renderEditorBody();
+  },
+  edDelPart: async el => {
+    const p = ed.draft.parts.find(x => x.id === el.dataset.pid); if (!p) return;
+    if (p.assignee || p.assistant){
+      if (!(await confirmDanger('Remove part?', `<p>“${esc(p.title)}” has people assigned. Remove it from this meeting?</p>`, 'Remove part'))) return;
+    }
+    ed.draft.parts = ed.draft.parts.filter(x => x !== p); renderEditorBody();
+  },
+  edApplyTemplate: async () => {
+    if (!(await confirmDanger('Replace all parts?', '<p>All parts in this meeting, including their assignments, will be replaced with the default parts from Settings.</p>', 'Replace parts'))) return;
+    ed.draft.parts = clone(state.settings.template).map(p => mergeMinistry({...p, id:uid(), assignee:'', assistant:''}));
+    renderEditorBody();
+  },
+  /* settings */
+  theme: el => { state.settings.theme = el.dataset.v; applyTheme(); save('Theme saved'); render(); },
+  logoPick: () => $('#logoFile').click(),
+  logoRemove: () => { state.settings.logoImage = ''; save('Logo removed'); render(); },
+  tplAdd: () => { state.settings.template.push({id:uid(), section:'living', title:'New part', type:'', format:'Pakigpulong', duration:5, assignee:'', assistant:'', notes:''}); save('Part added to template'); render(); },
+  tplMove: el => { const t = state.settings.template, i = +el.dataset.i, j = i + (+el.dataset.dir); if (j < 0 || j >= t.length) return; [t[i], t[j]] = [t[j], t[i]]; state.settings.template = orderedParts(t); save(); $('#tplList').innerHTML = templateHTML(); },
+  tplDel: async el => { const i = +el.dataset.i; const p = state.settings.template[i]; if (!(await confirmDanger('Remove part from template?', `<p>Remove “${esc(p.title)}” from the default parts? Existing meetings keep it.</p>`, 'Remove'))) return; state.settings.template.splice(i, 1); save('Template updated'); render(); },
+  tplReset: async () => { if (!(await confirmDanger('Restore original parts?', '<p>The default part list will be replaced with the app’s original list.</p>', 'Restore'))) return; state.settings.template = defaultTemplate(); save('Template restored'); render(); },
+  catAdd: () => {
+    const inp = $('#newCat'); const name = inp.value.trim(); if (!name) return toast('Type a category name first.', 'error');
+    if (state.settings.categories.some(c => c.name.toLowerCase() === name.toLowerCase())) return toast('That category already exists.', 'error');
+    let id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'cat';
+    while (state.settings.categories.some(c => c.id === id)) id += '-' + Math.floor(Math.random() * 90 + 10);
+    state.settings.categories.push({id, name}); save('Category added'); render();
+  },
+  catDel: async el => {
+    const i = +el.dataset.i, c = state.settings.categories[i]; if (!c || CORE_CATS.includes(c.id)) return;
+    const n = state.publishers.filter(p => p.categories.includes(c.id)).length;
+    if (!(await confirmDanger('Remove category?', `<p>Remove “${esc(c.name)}”? ${n} publisher${n === 1 ? '' : 's'} will lose this eligibility. Parts already using it keep their label.</p>`, 'Remove'))) return;
+    state.settings.categories.splice(i, 1);
+    state.publishers.forEach(p => { p.categories = p.categories.filter(x => x !== c.id); });
+    save('Category removed'); render();
+  },
+  exportJSON: () => { download(backupName(), backupJSON(), 'application/json'); markBackedUp(); toast('Backup file exported'); render(); },
+  shareJSON: async () => {
+    try {
+      const file = new File([backupJSON()], backupName(), {type:'application/json'});
+      if (navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file], title:'Meeting schedule backup'}); markBackedUp(); render(); }
+      else { toast('This browser can’t share files. Use Export backup instead.', 'error'); }
+    } catch (e) { if (e && e.name !== 'AbortError') toast('Sharing the backup failed. Use Export backup instead.', 'error'); }
+  },
+  importJSON: () => { const f = $('#importFile'); f.value = ''; f.click(); },
+  exportCSV: () => exportCSV(),
+  restorePrev: async () => {
+    let raw; try { raw = localStorage.getItem(PREV_KEY); } catch (e) {}
+    if (!raw) return toast('There is no earlier copy to restore.', 'error');
+    let prev; try { prev = validateData(JSON.parse(raw)); } catch (e) { return toast('The earlier copy is damaged and cannot be restored.', 'error'); }
+    if (!(await confirmDanger('Undo last import or reset?', `<p>Restore the copy saved before your last import or reset (${prev.meetings.length} meetings, ${prev.publishers.length} publishers)? The current data will be replaced.</p>`, 'Restore'))) return;
+    const cur = JSON.stringify(state); state = prev; try { localStorage.setItem(PREV_KEY, cur); } catch (e) {}
+    applyTheme(); save('Earlier data restored'); render();
+  },
+  resetSample: async () => {
+    if (!(await confirmDanger('Reset everything?', '<p>All meetings, publishers and settings on this device will be erased and the app returns to a blank start. A copy is kept so you can undo from Settings, but export a backup first if this data matters.</p>', 'Reset'))) return;
+    try { localStorage.setItem(PREV_KEY, JSON.stringify(state)); } catch (e) {}
+    state = validateData(sampleData()); applyTheme(); save('App reset'); render();
+  },
+  clearAll: async () => {
+    if (!(await confirmDanger('Erase meetings and publishers?', '<p>Every meeting and publisher on this device will be erased. Settings stay. A copy is kept so you can undo from Settings.</p>', 'Erase'))) return;
+    try { localStorage.setItem(PREV_KEY, JSON.stringify(state)); } catch (e) {}
+    state.meetings = []; state.publishers = []; state.removed = {}; save('Meetings and publishers erased'); render();
+  }
+};
+
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-action]');
+  if (!el || el.disabled) return;
+  const fn = actions[el.dataset.action];
+  if (fn){ if (el.tagName !== 'INPUT') e.preventDefault(); fn(el, e); }
+});
+
+/* Text/select input handling (delegated). */
+function onField(e){
+  const t = e.target, isChange = e.type === 'change';
+  if (ed && (t.dataset.ed !== undefined || t.dataset.ped !== undefined)) return onEditorField(t, isChange);
+  // Search boxes update on typing only; ignoring 'change' (fired on blur)
+  // prevents the result list re-rendering under the user's finger.
+  if ((t.id === 'listSearch' || t.id === 'pubSearch') && isChange) return;
+  if (t.id === 'listSearch'){ ui.listSearch = t.value; $('#listResults').innerHTML = listResultsHTML(); return; }
+  if (t.id === 'pubSearch'){ ui.pubSearch = t.value; $('#pubResults').innerHTML = pubResultsHTML(); return; }
+  if (!isChange) return;
+  if (t.id === 'listPast'){ ui.listPast = t.checked; $('#listResults').innerHTML = listResultsHTML(); return; }
+  if (t.id === 'pubCat'){ ui.pubCat = t.value; $('#pubResults').innerHTML = pubResultsHTML(); return; }
+  if (t.dataset.slip){ t.checked ? ui.slipOff.delete(t.dataset.slip) : ui.slipOff.add(t.dataset.slip); render(); return; }
+  if (t.id === 'pubViewSel'){ ui.pubViewId = t.value; render(); return; }
+  if (t.dataset.filter){ ui.pf[t.dataset.filter] = t.value; render(); return; }
+  if (t.dataset.set){
+    const k = t.dataset.set, s = state.settings, v = t.value;
+    if (k === 'congName'){ if (!v.trim()) { toast('The congregation name can’t be empty.', 'error'); t.value = s.congName; return; } s.congName = v.trim(); }
+    else if (k === 'logoText') s.logoText = v.trim().slice(0, 4).toUpperCase();
+    else if (k === 'secondHallDefault') s.secondHallDefault = t.checked;
+    else if (k === 'slipCopies') s.slipCopies = t.checked;
+    else if (k === 'meetingDay' || k === 'weekStart') s[k] = int(v, 0, 6, s[k]);
+    else if (k === 'meetingTime'){ if (!/^\d{2}:\d{2}$/.test(v)) { toast('Enter a valid time.', 'error'); return; } s.meetingTime = v; }
+    else if (k === 'duration'){ const n = int(v, 10, 300, null); if (n === null) { toast('Meeting length must be 10–300 minutes.', 'error'); t.value = s.duration; return; } s.duration = n; }
+    if (k === 'weekStart') ui.weekCursor = '';
+    save('Settings saved'); render(); return;
+  }
+  if (t.dataset.tpl){
+    const p = state.settings.template[+t.dataset.i]; if (!p) return;
+    const f = t.dataset.tpl;
+    if (f === 'title'){ if (!t.value.trim()) { toast('Part titles can’t be empty.', 'error'); t.value = p.title; return; } p.title = t.value.trim(); }
+    else if (f === 'duration') p.duration = int(t.value, 0, 180, 0);
+    else p[f] = t.value;
+    if (f === 'section') state.settings.template = orderedParts(state.settings.template);
+    save('Template saved'); if (f === 'section') $('#tplList').innerHTML = templateHTML(); return;
+  }
+  if (t.dataset.cat !== undefined){
+    const c = state.settings.categories[+t.dataset.cat]; if (!c) return;
+    if (!t.value.trim()) { toast('Category names can’t be empty.', 'error'); t.value = c.name; return; }
+    c.name = t.value.trim(); save('Category renamed'); return;
+  }
+}
+document.addEventListener('input', onField);
+document.addEventListener('change', onField);
+
+$('#importFile').addEventListener('change', e => importBackup(e.target.files[0]));
+$('#logoFile').addEventListener('change', e => { loadLogo(e.target.files[0]); e.target.value = ''; });
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && layers.length){ e.preventDefault(); layers[layers.length - 1]._dismiss(); }
+  if (e.key === 'Enter' && e.target.id === 'newCat'){ e.preventDefault(); actions.catAdd(); }
+});
+if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => applyTheme());
+
+/* Startup */
+load();
+applyTheme();
+ui.pf.from = todayISO();
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+render();
+</script>
+</body>
+</html>
