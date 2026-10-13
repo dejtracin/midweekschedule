@@ -434,11 +434,13 @@ textarea.input.details{min-height:96px}
 .p-title{font-size:9.5pt;color:#555}
 .p-meet{margin-bottom:16pt;break-inside:avoid;page-break-inside:avoid}
 .p-meet+.p-meet{padding-top:4pt}
-.p-band{background:#f0f0f0;padding:5pt 10pt;display:flex;justify-content:space-between;align-items:baseline;gap:12pt;flex-wrap:wrap}
+.p-band{background:#f0f0f0;padding:5pt 12pt;display:flex;justify-content:space-between;align-items:center;gap:12pt;flex-wrap:wrap}
 .p-band>b{font-size:17pt;white-space:nowrap}
-.p-band span{font-size:9pt;color:#333}
-.p-band .p-chair{font-size:12.5pt;color:#111}
-.p-band .p-chair b{font-weight:800}
+.p-roles{display:flex;align-items:stretch}
+.p-role{display:flex;flex-direction:column;gap:0;padding:0 0 0 12pt}
+.p-role+.p-role{margin-left:12pt;border-left:1pt solid #c4c4c4}
+.p-role .rl{font-size:7pt;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#6b6b6b}
+.p-role .rn{font-size:12pt;font-weight:700;color:#111;white-space:nowrap;line-height:1.25}
 .p-doc .prog{max-width:none}
 .p-doc .reading{font-size:10.5pt;margin:7pt 0 2pt}
 .p-doc .srow{margin:6pt 0 3pt}
@@ -2261,10 +2263,10 @@ async function deleteMeeting(id){
    3.8 PRINT, COPY, SHARE, EXPORT / IMPORT
    ===================================================================== */
 function printMeetingHTML(m){
-  const info = `<span class="p-chair">Chairman: <b>${esc(pname(m.chairman) || '—')}</b></span>`
-    + (m.secondHall ? ` · Second hall counselor: <b>${esc(pname(m.hall2Counselor) || '—')}</b>` : '');
+  const role = (label, id) => `<div class="p-role"><span class="rl">${label}</span><span class="rn">${esc(pname(id) || '—')}</span></div>`;
+  const info = role('Chairman', m.chairman) + (m.secondHall ? role('Second hall counselor', m.hall2Counselor) : '');
   return `<section class="p-meet">
-    <div class="p-band"><b>${esc(weekLabel(m))}</b><span>${info}</span></div>
+    <div class="p-band"><b>${esc(weekLabel(m))}</b><div class="p-roles">${info}</div></div>
     ${renderProgram(m)}
     ${m.notes ? `<div class="p-note">Notes: ${esc(m.notes)}</div>` : ''}
   </section>`;
