@@ -1718,7 +1718,7 @@ function cbsCardHTML(p, num){
     </div></div>`;
 }
 
-/* Second hall (auxiliary classroom) panel at the top of the editor. */
+/* Second hall (auxiliary classroom) panel, below the chairman and prayer roles. */
 function hall2PanelHTML(d){
   if (!d.secondHall) return `<div class="panel hall2-panel" style="margin-top:14px">
     <div class="btnrow" style="justify-content:space-between">
@@ -1754,7 +1754,6 @@ function editorHTML(){
     <label class="field"><span>Week label</span><input class="input" data-ed="weekLabel" value="${esc(d.weekLabel)}" placeholder="${esc(parseISO(d.date) ? fmtRange(weekStartOf(parseISO(d.date))) : 'e.g. October 12–18')}" maxlength="60"></label>
     <label class="field"><span>Bible reading</span><input class="input" data-ed="reading" value="${esc(d.reading)}" placeholder="From the workbook" maxlength="100"></label>
   </div>
-  ${hall2PanelHTML(d)}
   <div class="grid3 songs" style="margin-top:12px">
     <label class="field"><span>Opening song</span><input class="input" type="number" inputmode="numeric" min="1" max="999" data-ed="song.opening" value="${d.songs.opening}"></label>
     <label class="field"><span>Middle song</span><input class="input" type="number" inputmode="numeric" min="1" max="999" data-ed="song.middle" value="${d.songs.middle}"></label>
@@ -1765,6 +1764,7 @@ function editorHTML(){
     <label class="field"><span>Opening prayer</span><select class="input" data-ed="openingPrayer">${pubOptions(d.openingPrayer, 'prayer', false, false, true)}</select></label>
     <label class="field"><span>Closing prayer</span><select class="input" data-ed="closingPrayer">${pubOptions(d.closingPrayer, 'prayer', false, false, true)}</select></label>
   </div>
+  ${hall2PanelHTML(d)}
   <label class="field" style="margin-top:12px"><span>Notes or special instructions</span><textarea class="input" data-ed="notes" maxlength="2000">${esc(d.notes)}</textarea></label>
   <div class="btnrow" style="margin-top:10px;justify-content:space-between">
     <label class="check"><input type="checkbox" data-action="edShowAll" ${ed.showAll ? 'checked' : ''}> Show publishers not marked eligible</label>
