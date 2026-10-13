@@ -13,8 +13,9 @@
   Christian Life and Ministry Meeting Schedule
   ---------------------------------------------
   Single self-contained file: HTML + CSS + vanilla JavaScript.
-  No server, no network requests, no tracking. All data lives in this
-  browser's localStorage under the key "clm-schedule-data-v1".
+  No tracking. Data lives in this browser's localStorage under the key
+  "clm-schedule-data-v1". Optional cloud sync (section 3.3b) also keeps it
+  in your own Supabase project; nothing is sent anywhere else.
 
   File map (search for these banners):
     1. STYLES ............ design tokens, layout, workbook typography, print
@@ -199,6 +200,9 @@ button.chip{cursor:pointer;min-height:26px}
 .notice.ok{border-color:var(--ok);background:var(--ok-bg)}
 .notice ul{margin:6px 0 0;padding-left:18px}
 .notice li{margin-bottom:6px}
+.cbanner{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:8px 16px 0}
+.hlist{max-height:55vh;overflow:auto;border-top:1px solid var(--line)}
+.hrow{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
 .jumps{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
 .btn.jump{min-height:30px;padding:2px 10px;font-size:13px;background:var(--surface)}
 .btn.jump svg{width:14px;height:14px}
@@ -761,8 +765,9 @@ function save(msg){
   state.updatedAt = new Date().toISOString();
   if (storageOK){
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
-    catch (e) { storageOK = false; renderBanner(); toast('Could not save to this browser. Export a backup now.', 'error'); return; }
+    catch (e) { storageOK = false; renderBanner(); toast('Could not save to this browser. Export a backup now.', 'error'); }
   }
+  cloudChanged();
   if (msg) toast(msg);
 }
 
@@ -781,6 +786,298 @@ function load(){
   }
   state = validateData(sampleData());
   save();
+}
+
+/* =====================================================================
+   3.3b CLOUD SYNC (Supabase)
+   The whole app state is kept as ONE row in your own Supabase project.
+   Every change is saved on this device first, then uploaded a moment
+   later. Other devices check for a newer version every minute and when
+   the app comes back to the screen. The database also keeps a daily
+   copy (see supabase-setup.sql), so a bad day can be undone.
+   ===================================================================== */
+// Optional: paste your project details here once, so nobody has to type
+// them on each device (Supabase › Project Settings › API Keys / Data API).
+// Use the PUBLISHABLE key (or the legacy "anon public" key). NEVER put the
+// secret / service_role key here.
+const CLOUD_URL = '';
+const CLOUD_KEY = '';
+const CLOUD_CFG_KEY = 'clm-cloud-config', CLOUD_SES_KEY = 'clm-cloud-session', CLOUD_META_KEY = 'clm-cloud-meta';
+const CLOUD_ROW = 'main';
+
+const cloud = {cfg:null, ses:null, role:'', name:'', status:'off', error:'', busy:false, again:false, paused:false,
+  timer:null, retry:null, edits:0, remote:null, meta:{url:'', version:0, dirty:false, syncedAt:''}};
+
+function lsGet(k){ try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
+function lsSet(k, v){ try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function cloudCfg(){
+  if (CLOUD_URL && CLOUD_KEY) return {url:CLOUD_URL.trim().replace(/\/+$/, ''), key:CLOUD_KEY.trim(), fixed:true};
+  const c = lsGet(CLOUD_CFG_KEY); return c && c.url && c.key ? c : null;
+}
+const cloudOn = () => !!(cloud.cfg && cloud.ses);
+const saveMeta = () => lsSet(CLOUD_META_KEY, cloud.meta);
+const hasData = s => !!(s && (s.meetings.length || s.publishers.length));
+
+/* Save to this browser only (used when taking a version from the cloud). */
+function saveLocalOnly(){
+  if (storageOK){ try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
+}
+function keepPrevCopy(){ try { localStorage.setItem(PREV_KEY, JSON.stringify(state)); } catch (e) {} }
+
+async function cloudFetch(path, opts = {}, auth = true){
+  const headers = {apikey:cloud.cfg.key, 'Content-Type':'application/json', ...(opts.headers || {})};
+  if (auth){ await freshToken(); headers.Authorization = 'Bearer ' + cloud.ses.access_token; }
+  let res;
+  try { res = await fetch(cloud.cfg.url + path, {...opts, headers}); }
+  catch (e) { throw Object.assign(new Error('No internet connection'), {offline:true}); }
+  const text = await res.text(); let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch (e) { body = text; }
+  if (!res.ok){
+    const msg = body && typeof body === 'object' ? (body.msg || body.message || body.error_description || body.error) : '';
+    throw Object.assign(new Error(msg || `Server answered ${res.status}`), {status:res.status, body});
+  }
+  return body;
+}
+function storeSession(b){
+  const old = cloud.ses || {};
+  cloud.ses = {access_token:b.access_token, refresh_token:b.refresh_token, expires_at:Date.now() + (b.expires_in || 3600) * 1000,
+    email:(b.user && b.user.email) || old.email || '', uid:(b.user && b.user.id) || old.uid || ''};
+  lsSet(CLOUD_SES_KEY, cloud.ses);
+}
+let refreshing = null;
+function freshToken(){
+  if (!cloud.ses) return Promise.reject(Object.assign(new Error('Not signed in'), {status:401}));
+  if (Date.now() < cloud.ses.expires_at - 60000) return Promise.resolve();
+  if (!refreshing) refreshing = cloudFetch('/auth/v1/token?grant_type=refresh_token',
+      {method:'POST', body:JSON.stringify({refresh_token:cloud.ses.refresh_token})}, false)
+    .then(storeSession)
+    .catch(e => { if (!e.offline && e.status >= 400 && e.status < 500) signedOut('Your cloud sign-in has expired. Please sign in again.'); throw e; })
+    .finally(() => { refreshing = null; });
+  return refreshing;
+}
+function signedOut(msg){
+  cloud.ses = null; cloud.role = ''; lsSet(CLOUD_SES_KEY, null);
+  setStatus('signedout'); if (msg) toast(msg, 'error');
+}
+
+/* ---- Remote row ---- */
+const HEAD = 'version,updated_at,updated_by_email';
+async function fetchRemote(full){
+  const rows = await cloudFetch(`/rest/v1/schedule?id=eq.${CLOUD_ROW}&select=${full ? 'data,' : ''}${HEAD}`);
+  return (rows && rows[0]) || null;
+}
+async function loadRole(){
+  const rows = await cloudFetch(`/rest/v1/members?select=role,display_name&user_id=eq.${encodeURIComponent(cloud.ses.uid)}`);
+  if (!rows || !rows[0]) throw Object.assign(new Error('This account is not on the members list yet. Add it in Supabase (setup step 5).'), {notMember:true});
+  cloud.role = rows[0].role; cloud.name = rows[0].display_name || '';
+}
+/* Upload this device's state. Returns false if someone else saved first. */
+async function pushRemote(){
+  const sent = cloud.edits, v = cloud.meta.version;
+  const prefer = {Prefer:'return=representation'};
+  let rows;
+  try {
+    rows = v === 0
+      ? await cloudFetch(`/rest/v1/schedule?select=${HEAD}`, {method:'POST', headers:prefer, body:JSON.stringify({id:CLOUD_ROW, data:state, version:1})})
+      : await cloudFetch(`/rest/v1/schedule?id=eq.${CLOUD_ROW}&version=eq.${v}&select=${HEAD}`, {method:'PATCH', headers:prefer, body:JSON.stringify({data:state, version:v + 1})});
+  } catch (e) { if (e.status === 409) return false; throw e; }
+  const row = rows && rows[0]; if (!row) return false;
+  cloud.meta.version = row.version; cloud.remote = row;
+  cloud.meta.dirty = cloud.edits !== sent;           // more edits arrived while uploading
+  cloud.meta.syncedAt = new Date().toISOString(); saveMeta();
+  if (cloud.meta.dirty) schedulePush(800);
+  return true;
+}
+function applyRemote(remote){
+  let data;
+  try { data = validateData(remote.data); }
+  catch (e) { throw new Error('The cloud copy could not be read: ' + e.message); }
+  state = data; saveLocalOnly();
+  cloud.meta.version = remote.version; cloud.meta.dirty = false; cloud.meta.syncedAt = new Date().toISOString(); saveMeta();
+  cloud.remote = remote; applyTheme(); render();
+}
+const whoWhen = r => `${r.updated_by_email ? esc(r.updated_by_email) : 'someone'}, ${esc(new Date(r.updated_at).toLocaleString())}`;
+const counts = s => `${s.meetings.length} meetings, ${s.publishers.length} publishers`;
+
+/* Both this device and the cloud changed: ask which to keep. */
+async function chooseVersion(remote, firstLink){
+  let cloudData; try { cloudData = validateData(remote.data); } catch (e) { cloudData = null; }
+  setStatus('conflict');
+  const msg = firstLink
+    ? `<p>The cloud already has a schedule (<b>${cloudData ? counts(cloudData) : 'unreadable'}</b>, last saved by ${whoWhen(remote)}).</p><p>This device has its own data (<b>${counts(state)}</b>). Which one should be used from now on?</p><p class="muted">The one you don’t choose is kept as a copy: Settings › Undo, or the daily copies in the cloud.</p>`
+    : `<p>The schedule was changed on another device (${whoWhen(remote)}) while this device also had changes that were not uploaded yet.</p><p>Cloud: <b>${cloudData ? counts(cloudData) : 'unreadable'}</b><br>This device: <b>${counts(state)}</b></p><p class="muted">The one you don’t choose is kept as a copy: Settings › Undo, or the daily copies in the cloud.</p>`;
+  const pick = await dialog({title:firstLink ? 'Which schedule should be used?' : 'Two different versions', message:msg,
+    buttons:[{label:'Use this device’s version', value:'local'}, ...(cloudData ? [{label:'Use the cloud version', value:'cloud', cls:'primary'}] : [])]});
+  if (!pick){ cloud.paused = true; setStatus('conflict'); return; }
+  cloud.paused = false;
+  if (pick === 'cloud'){ keepPrevCopy(); applyRemote(remote); toast('Using the cloud version'); }
+  else { cloud.meta.version = remote.version; if (!(await pushRemote())) throw new Error('The cloud changed again. Tap Sync now to try again.'); toast('This device’s version was uploaded'); }
+}
+
+/* One sync round: compare versions, then download, upload or ask. */
+async function syncNow(manual){
+  if (!cloudOn()) return;
+  if (cloud.busy){ cloud.again = true; return; }
+  if (cloud.paused && !manual) return;
+  cloud.busy = true; clearTimeout(cloud.retry);
+  setStatus('syncing');
+  try {
+    if (!cloud.role) await loadRole();
+    const head = await fetchRemote(false);
+    const m = cloud.meta, editorOpen = layers.length > 0;
+    if (!head){                                   // nothing in the cloud yet
+      m.version = 0; await pushRemote() || (await syncAgain());
+    } else if (m.version === 0){                  // first time on this device
+      const remote = await fetchRemote(true);
+      let cloudData = null; try { cloudData = validateData(remote.data); } catch (e) {}
+      if (!hasData(state)) { if (editorOpen) return later(); applyRemote(remote); }
+      else if (cloudData && !hasData(cloudData)){ m.version = remote.version; await pushRemote(); }
+      else await chooseVersion(remote, true);
+    } else if (head.version === m.version){
+      cloud.remote = head;
+      if (m.dirty && !(await pushRemote())) await syncAgain();
+    } else if (head.version > m.version){         // someone else saved
+      const remote = await fetchRemote(true);
+      if (!m.dirty){ if (editorOpen) return later(); applyRemote(remote); toast('Schedule updated from the cloud'); }
+      else await chooseVersion(remote, false);
+    } else {                                       // cloud is older (restored database): upload ours
+      m.version = head.version; m.dirty = true; await pushRemote();
+    }
+    if (cloud.status !== 'conflict' || !cloud.paused) setStatus(cloud.meta.dirty ? 'pending' : 'synced');
+  } catch (e) {
+    if (e.offline){ setStatus('offline'); cloud.retry = setTimeout(syncNow, 30000); }
+    else if (e.status === 401){ signedOut('Please sign in to cloud sync again.'); }
+    else { cloud.error = e.message; setStatus('error'); cloud.retry = setTimeout(syncNow, 60000); console.error('Cloud sync:', e); }
+  } finally {
+    cloud.busy = false;
+    if (cloud.again){ cloud.again = false; schedulePush(300); }
+  }
+  // Inner helpers
+  function later(){ setStatus(cloud.meta.dirty ? 'pending' : 'synced'); cloud.retry = setTimeout(syncNow, 15000); }
+  async function syncAgain(){ cloud.again = true; }
+}
+function cloudStart(){
+  cloud.cfg = cloudCfg();
+  if (!cloud.cfg) return;
+  cloud.ses = lsGet(CLOUD_SES_KEY);
+  const m = lsGet(CLOUD_META_KEY);
+  cloud.meta = m && m.url === cloud.cfg.url ? {version:0, dirty:false, syncedAt:'', ...m} : {url:cloud.cfg.url, version:0, dirty:false, syncedAt:''};
+  saveMeta();
+  cloud.status = cloud.ses ? 'syncing' : 'signedout';
+  if (cloud.ses) setTimeout(() => syncNow(), 50);
+  setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 60000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
+  window.addEventListener('online', () => syncNow());
+}
+function schedulePush(ms){ clearTimeout(cloud.timer); cloud.timer = setTimeout(() => syncNow(), ms); }
+
+/* Called by save() after every change. */
+function cloudChanged(){
+  if (!cloud.cfg) return;
+  cloud.edits++; cloud.meta.dirty = true; saveMeta();
+  if (cloud.ses && !cloud.paused){ setStatus('pending'); schedulePush(1500); }
+}
+
+/* ---- Status shown in the sidebar, banner and Settings ---- */
+function setStatus(s){
+  cloud.status = s;
+  const f = $('#sideFoot'); if (f) f.textContent = footText();
+  renderBanner();
+  const box = $('#cloudBox');
+  if (box && !box.querySelector('input')) box.innerHTML = cloudBoxHTML();   // don't wipe a half-typed form
+}
+function refreshCloudBox(){ const box = $('#cloudBox'); if (box) box.innerHTML = cloudBoxHTML(); }
+function footText(){
+  if (!cloud.cfg) return state.updatedAt ? 'Saved on this device · ' + new Date(state.updatedAt).toLocaleString() : '';
+  return {signedout:'Cloud sync: not signed in', syncing:'Syncing…', pending:'Saved on this device · uploading…',
+    offline:'Offline · saved on this device, will upload later', error:'Cloud sync problem · see Settings',
+    conflict:'Cloud sync paused · choose a version',
+    synced:'Synced to cloud · ' + (cloud.meta.syncedAt ? new Date(cloud.meta.syncedAt).toLocaleString() : ''), off:''}[cloud.status] || '';
+}
+function cloudBannerHTML(){
+  if (!cloud.cfg) return '';
+  const b = (cls, text, btn) => `<div class="cbanner notice ${cls}"><span>${text}</span>${btn || ''}</div>`;
+  const go = `<button class="btn sm" data-action="nav" data-tab="settings">Open Settings</button>`;
+  if (cloud.status === 'signedout') return b('info', 'Cloud sync is set up but you are not signed in on this device.', go);
+  if (cloud.status === 'conflict') return b('conflict', 'Cloud sync is paused: this device and the cloud have different versions.', `<button class="btn sm" data-action="cloudSync">Choose version</button>`);
+  if (cloud.status === 'error') return b('conflict', 'Cloud sync problem: ' + esc(cloud.error), go);
+  if (cloud.status === 'offline' && cloud.meta.dirty) return b('', 'Offline. Your changes are saved on this device and will upload when you’re back online.');
+  return '';
+}
+
+function cloudBoxHTML(){
+  const c = cloud.cfg;
+  if (!c) return `<p class="muted" style="margin-top:0">Keep the schedule in your own free Supabase project so it is saved online and is the same on every device. Follow the setup guide that came with this file, then paste the two values from Supabase here.</p>
+    <div class="grid2">
+      <label class="field"><span>Project URL</span><input class="input" id="cloudUrl" placeholder="https://abcdefgh.supabase.co" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>Publishable key (or anon public key)</span><input class="input" id="cloudKey" placeholder="sb_publishable_…" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <div class="btnrow" style="margin-top:10px"><button class="btn primary" data-action="cloudSaveCfg">Save project details</button></div>`;
+  const forget = c.fixed ? '' : `<button class="btn ghost sm" data-action="cloudForget">Change project</button>`;
+  if (!cloud.ses) return `<p class="muted" style="margin-top:0">Sign in with the account the admin created for you in Supabase. You only need to do this once on each device.</p>
+    <div class="grid2">
+      <label class="field"><span>Email</span><input class="input" id="cloudEmail" type="email" autocomplete="username" spellcheck="false"></label>
+      <label class="field"><span>Password</span><input class="input" id="cloudPw" type="password" autocomplete="current-password"></label>
+    </div>
+    <div class="btnrow" style="margin-top:10px"><button class="btn primary" data-action="cloudSignIn">Sign in</button>${forget}</div>`;
+  const st = cloud.status, r = cloud.remote;
+  const cls = st === 'synced' ? 'ok' : (st === 'error' || st === 'conflict') ? 'conflict' : st === 'offline' ? '' : 'info';
+  const head = {synced:'Everything is saved in the cloud.', syncing:'Syncing…', pending:'Uploading your latest changes…',
+    offline:'Offline. Changes are saved on this device and will upload automatically.', error:'Sync problem: ' + esc(cloud.error),
+    conflict:'Sync is paused until you choose which version to keep.'}[st] || '';
+  const role = {admin:'Admin', editor:'Editor'}[cloud.role] || '';
+  return `<div class="notice ${cls}"><p><b>${head}</b></p>
+      <p style="margin:6px 0 0">Signed in as <b>${esc(cloud.ses.email)}</b>${role ? ` (${role})` : ''}.
+      ${r ? `<br>Last change in the cloud: ${whoWhen(r)}.` : ''}</p></div>
+    <div class="btnrow" style="margin-top:10px">
+      <button class="btn" data-action="cloudSync">Sync now</button>
+      <button class="btn" data-action="cloudHistory">Daily copies</button>
+      <button class="btn" data-action="cloudSignOut">Sign out</button>${forget}</div>`;
+}
+
+/* ---- Sign in / out, setup ---- */
+async function cloudSignIn(){
+  const email = ($('#cloudEmail') || {}).value?.trim(), pw = ($('#cloudPw') || {}).value || '';
+  if (!email || !pw) return toast('Enter your email and password.', 'error');
+  try {
+    const b = await cloudFetch('/auth/v1/token?grant_type=password', {method:'POST', body:JSON.stringify({email, password:pw})}, false);
+    storeSession(b); cloud.role = ''; cloud.paused = false;
+    refreshCloudBox(); toast('Signed in');
+    await syncNow(true);
+    render();
+    if (cloud.status === 'error' && cloud.error && /members list/.test(cloud.error)) toast(cloud.error, 'error');
+  } catch (e) {
+    toast(e.offline ? 'No internet connection.' : (e.status === 400 ? 'Wrong email or password.' : 'Sign-in failed: ' + e.message), 'error');
+  }
+}
+function cloudSaveCfg(){
+  const url = ($('#cloudUrl').value || '').trim().replace(/\/+$/, ''), key = ($('#cloudKey').value || '').trim();
+  if (!/^https:\/\/[^\s/]+$/.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(url)) return toast('The Project URL should look like https://abcdefgh.supabase.co', 'error');
+  if (!key) return toast('Paste the publishable key.', 'error');
+  if (/^sb_secret_/.test(key) || jwtRole(key) === 'service_role') return toast('That is the SECRET key. Use the publishable (or anon public) key instead, and keep the secret key private.', 'error');
+  cloud.cfg = {url, key}; lsSet(CLOUD_CFG_KEY, cloud.cfg);
+  cloud.meta = {url, version:0, dirty:false, syncedAt:''}; saveMeta();
+  setStatus('signedout'); refreshCloudBox(); toast('Project saved. Now sign in.');
+}
+function jwtRole(k){ try { return JSON.parse(atob(k.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role; } catch (e) { return ''; } }
+
+/* ---- Daily copies kept by the database ---- */
+async function cloudHistory(){
+  let rows;
+  try { rows = await cloudFetch('/rest/v1/schedule_history?select=id,snap_date,saved_at,saved_by_email,version&order=snap_date.desc&limit=120'); }
+  catch (e) { return toast(e.offline ? 'No internet connection.' : 'Could not load the daily copies: ' + e.message, 'error'); }
+  const list = rows && rows.length ? rows.map(r => `<div class="hrow"><div><b>${esc(fmtLong(r.snap_date))}</b>
+      <div class="muted" style="font-size:13px">As it was before that day’s changes · last saved by ${esc(r.saved_by_email || 'someone')}</div></div>
+      <div class="btnrow"><button class="btn sm" data-action="cloudDownload" data-id="${r.id}" data-d="${esc(r.snap_date)}">Download</button>
+      <button class="btn sm danger" data-action="cloudRestore" data-id="${r.id}" data-d="${esc(r.snap_date)}">Restore</button></div></div>`).join('')
+    : '<p class="muted">No daily copies yet. A copy is made automatically on the first change of each day.</p>';
+  dialog({title:'Daily copies in the cloud', message:`<p class="muted" style="margin-top:0">The cloud keeps one copy per day for about 4 months. Restoring replaces the current schedule for everyone (the current one is kept as today’s copy).</p><div class="hlist">${list}</div>`,
+    buttons:[{label:'Close', value:false}]});
+}
+async function historyData(id){
+  const rows = await cloudFetch(`/rest/v1/schedule_history?id=eq.${encodeURIComponent(id)}&select=data`);
+  if (!rows || !rows[0]) throw new Error('That copy no longer exists.');
+  return rows[0].data;
 }
 
 /* =====================================================================
@@ -1041,15 +1338,16 @@ function render(){
   $('#topBrand').innerHTML = `<span class="logo" aria-hidden="true">${$('#sideBrand .logo').innerHTML}</span>`;
   $('#topTitle').textContent = ui.tab === 'home' ? state.settings.congName : tab.title;
   $('#topAdd').innerHTML = ICON.plus + '<span>Meeting</span>';
-  $('#sideFoot').textContent = state.updatedAt ? 'Saved on this device · ' + new Date(state.updatedAt).toLocaleString() : '';
+  $('#sideFoot').textContent = footText();
   const views = {home:viewHome, schedule:viewSchedule, slips:viewSlips, publishers:viewPublishers, planner:viewPlanner, settings:viewSettings};
   $('#view').innerHTML = views[ui.tab]();
   renderBanner();
 }
 
 function renderBanner(){
-  $('#banner').innerHTML = storageOK ? '' :
-    `<div class="banner">This browser is not letting the app save data. Changes will be lost when the page closes — use Settings › Export backup, or open the app from a hosted address (see Settings › About storage).</div>`;
+  $('#banner').innerHTML = (storageOK ? '' :
+    `<div class="banner">This browser is not letting the app save data. Changes will be lost when the page closes — use Settings › Export backup, or open the app from a hosted address (see Settings › About storage).</div>`)
+    + cloudBannerHTML();
 }
 
 /* ---------- Home / dashboard ---------- */
@@ -1057,7 +1355,7 @@ function viewHome(){
   const m = nextMeeting();
   const s = state.settings;
   const backupAge = s.lastBackup ? daysUntil(s.lastBackup.slice(0, 10)) * -1 : null;
-  const backupNote = (backupAge === null || backupAge > 14)
+  const backupNote = !cloudOn() && (backupAge === null || backupAge > 14)
     ? `<div class="notice info" style="margin-top:20px"><p><b>${backupAge === null ? 'No backup yet.' : `Last backup was ${backupAge} days ago.`}</b> Your data is stored only in this browser. Export a backup file regularly.</p><div class="btnrow" style="margin-top:8px"><button class="btn sm" data-action="exportJSON">${ICON.download}Export backup</button></div></div>` : '';
   if (!m){
     return `<div class="wrap"><div class="empty"><h3>No upcoming meetings</h3><p>Add the next midweek meeting from your workbook to see it here.</p>
@@ -1511,6 +1809,9 @@ function viewSettings(){
     ${CORE_CATS.includes(c.id) ? '<span class="chip" title="Used by the app">Built in</span>' : `<button class="btn icon sm ghost" data-action="catDel" data-i="${i}" aria-label="Remove ${esc(c.name)}">${ICON.trash}</button>`}</div>`).join('')}</div>
   <div class="btnrow" style="margin-top:10px"><input class="input" id="newCat" placeholder="New category name" maxlength="60" style="flex:1;min-width:180px"><button class="btn" data-action="catAdd">${ICON.plus}Add category</button></div>
 
+  <h2 class="subhead">Cloud sync</h2>
+  <div id="cloudBox">${cloudBoxHTML()}</div>
+
   <h2 class="subhead">Backup &amp; data</h2>
   <p class="muted" style="margin-top:0">Last backup: <b>${s.lastBackup ? esc(new Date(s.lastBackup).toLocaleString()) : 'never'}</b>. ${state.meetings.length} meetings and ${state.publishers.length} publishers on this device.</p>
   <div class="btnrow">
@@ -1526,7 +1827,7 @@ function viewSettings(){
   </div>
 
   <h2 class="subhead">About storage</h2>
-  <div class="notice ${storageOK ? 'ok' : 'conflict'}"><p><b>${storageOK ? 'Saving works in this browser.' : 'Saving is blocked in this browser.'}</b> Data is stored with the browser’s localStorage on this device only. Nothing is sent anywhere.</p></div>
+  <div class="notice ${storageOK ? 'ok' : 'conflict'}"><p><b>${storageOK ? 'Saving works in this browser.' : 'Saving is blocked in this browser.'}</b> ${cloudOn() ? 'Data is kept on this device and in your own Supabase project (Cloud sync above). It is sent nowhere else.' : 'Data is stored with the browser’s localStorage on this device only. Nothing is sent anywhere.'}</p></div>
   <ul style="padding-left:20px;color:var(--text)">
     <li>Each browser keeps its own copy. Data in Safari is not visible in Chrome, and data on your Mac is not on your iPhone. Use Export / Import to move it.</li>
     <li>Clearing website data or history in the browser erases it. Private browsing may not keep it at all.</li>
@@ -2274,12 +2575,39 @@ const actions = {
     applyTheme(); save('Earlier data restored'); render();
   },
   resetSample: async () => {
-    if (!(await confirmDanger('Reset everything?', '<p>All meetings, publishers and settings on this device will be erased and the app returns to a blank start. A copy is kept so you can undo from Settings, but export a backup first if this data matters.</p>', 'Reset'))) return;
+    if (!(await confirmDanger('Reset everything?', '<p>All meetings, publishers and settings on this device will be erased and the app returns to a blank start. A copy is kept so you can undo from Settings, but export a backup first if this data matters.</p>' + (cloudOn() ? '<p><b>Cloud sync is on, so the cloud copy is erased too.</b> Today’s daily copy can bring it back.</p>' : ''), 'Reset'))) return;
     try { localStorage.setItem(PREV_KEY, JSON.stringify(state)); } catch (e) {}
     state = validateData(sampleData()); applyTheme(); save('App reset'); render();
   },
+  cloudSaveCfg: () => cloudSaveCfg(),
+  cloudSignIn: () => cloudSignIn(),
+  cloudSync: () => { cloud.paused = false; syncNow(true); },
+  cloudHistory: () => cloudHistory(),
+  cloudSignOut: async () => {
+    if (cloud.meta.dirty && !(await confirmDanger('Sign out?', '<p>Some changes on this device have not been uploaded yet. They stay on this device and upload when you sign in again.</p>', 'Sign out'))) return;
+    const ses = cloud.ses;
+    try { await fetch(cloud.cfg.url + '/auth/v1/logout', {method:'POST', headers:{apikey:cloud.cfg.key, Authorization:'Bearer ' + ses.access_token}}); } catch (e) {}
+    signedOut(); toast('Signed out of cloud sync');
+  },
+  cloudForget: async () => {
+    if (!(await confirmDanger('Change project?', '<p>This device stops syncing and forgets the Supabase project details. The schedule stays on this device, and the cloud copy is not touched.</p>', 'Forget project'))) return;
+    lsSet(CLOUD_CFG_KEY, null); lsSet(CLOUD_SES_KEY, null); lsSet(CLOUD_META_KEY, null);
+    cloud.cfg = cloudCfg(); cloud.ses = null; cloud.role = ''; cloud.meta = {url:'', version:0, dirty:false, syncedAt:''};
+    setStatus(cloud.cfg ? 'signedout' : 'off'); render();
+  },
+  cloudDownload: async el => {
+    try { download(`clm-cloud-copy-${el.dataset.d}.json`, JSON.stringify(await historyData(el.dataset.id), null, 2), 'application/json'); }
+    catch (e) { toast('Download failed: ' + e.message, 'error'); }
+  },
+  cloudRestore: async el => {
+    let data;
+    try { data = validateData(await historyData(el.dataset.id)); } catch (e) { return toast('That copy could not be restored: ' + e.message, 'error'); }
+    if (!(await confirmDanger('Restore this copy?', `<p>Replace the current schedule with the copy from <b>${esc(fmtLong(el.dataset.d))}</b> (${counts(data)})? This changes it for everyone.</p>`, 'Restore'))) return;
+    layers.slice().forEach(l => closeLayer(l));
+    keepPrevCopy(); state = data; applyTheme(); save('Copy restored'); render();
+  },
   clearAll: async () => {
-    if (!(await confirmDanger('Erase meetings and publishers?', '<p>Every meeting and publisher on this device will be erased. Settings stay. A copy is kept so you can undo from Settings.</p>', 'Erase'))) return;
+    if (!(await confirmDanger('Erase meetings and publishers?', '<p>Every meeting and publisher on this device will be erased. Settings stay. A copy is kept so you can undo from Settings.</p>' + (cloudOn() ? '<p><b>Cloud sync is on, so the cloud copy is erased too.</b> Today’s daily copy can bring it back.</p>' : ''), 'Erase'))) return;
     try { localStorage.setItem(PREV_KEY, JSON.stringify(state)); } catch (e) {}
     state.meetings = []; state.publishers = []; state.removed = {}; save('Meetings and publishers erased'); render();
   }
@@ -2343,6 +2671,7 @@ $('#logoFile').addEventListener('change', e => { loadLogo(e.target.files[0]); e.
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && layers.length){ e.preventDefault(); layers[layers.length - 1]._dismiss(); }
   if (e.key === 'Enter' && e.target.id === 'newCat'){ e.preventDefault(); actions.catAdd(); }
+  if (e.key === 'Enter' && e.target.id === 'cloudPw'){ e.preventDefault(); cloudSignIn(); }
 });
 if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => applyTheme());
 
@@ -2351,6 +2680,7 @@ load();
 applyTheme();
 ui.pf.from = todayISO();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+cloudStart();
 render();
 </script>
 </body>
