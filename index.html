@@ -178,6 +178,7 @@ select.input{appearance:none;-webkit-appearance:none;padding-right:32px;
 .hall{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 6px;min-width:86px;text-align:center}
 .hall.h2{color:var(--ministry);border-color:var(--ministry-bg)}
 .pnote{color:var(--muted);font-size:14px;margin-top:2px}
+.rnote{color:var(--text)}
 .remark{margin:12px 0;font-size:1.02em}
 .remark b{font-weight:700}
 .unassigned{color:var(--danger);font-weight:600}
@@ -430,6 +431,8 @@ textarea.input.details{min-height:96px}
 .p-band{background:#f0f0f0;padding:5pt 10pt;display:flex;justify-content:space-between;align-items:baseline;gap:12pt;flex-wrap:wrap}
 .p-band>b{font-size:17pt;white-space:nowrap}
 .p-band span{font-size:9pt;color:#333}
+.p-band .p-chair{font-size:12.5pt;color:#111}
+.p-band .p-chair b{font-weight:800}
 .p-doc .prog{max-width:none}
 .p-doc .reading{font-size:10.5pt;margin:7pt 0 2pt}
 .p-doc .srow{margin:6pt 0 3pt}
@@ -921,7 +924,7 @@ function programRows(m){
   const rows = []; let n = 0;
   const tre = parts.filter(p => p.section === 'treasures');
   const opening = tre[0] && isRemarks(tre[0]) ? tre[0] : null;
-  rows.push({kind:'song', song:m.songs.opening, pid:prayerPid(m, m.openingPrayer), role:'Pag-ampo', remark:opening});
+  rows.push({kind:'song', song:m.songs.opening, pid:prayerPid(m, m.openingPrayer), chair:m.openingPrayer === CHAIR, role:'Pag-ampo', remark:opening});
   SECTIONS.forEach(sec => {
     let list = parts.filter(p => p.section === sec.id);
     if (opening && sec.id === 'treasures') list = list.slice(1);
@@ -929,7 +932,7 @@ function programRows(m){
     if (sec.id === 'living' && m.songs.middle) rows.push({kind:'song', song:m.songs.middle});
     list.forEach(p => rows.push(isRemarks(p) ? {kind:'remark', part:p} : {kind:'part', part:p, n:++n}));
   });
-  rows.push({kind:'song', song:m.songs.closing, pid:prayerPid(m, m.closingPrayer), role:'Pag-ampo', closing:true});
+  rows.push({kind:'song', song:m.songs.closing, pid:prayerPid(m, m.closingPrayer), chair:m.closingPrayer === CHAIR, role:'Pag-ampo', closing:true});
   return rows;
 }
 const songTxt = n => `Awit ${n || '—'}`;
@@ -962,12 +965,12 @@ function renderProgram(m){
     if (r.kind === 'song'){
       let left = `<span class="song">${songTxt(r.song)}</span>${r.pid !== undefined ? ' ug Pag-ampo' : ''}`;
       if (r.remark) left += ` <span class="sep">|</span> ${esc(r.remark.title)} <span class="dur">(${r.remark.duration} min.)</span>`;
-      h += `<div class="prow srow"><p class="songline">${left}</p><div class="names">${r.role ? `<span class="lbl">${r.role}</span>${nameHTML(r.pid)}` : ''}</div></div>`;
+      h += `<div class="prow srow"><p class="songline">${left}</p><div class="names">${r.role ? `<span class="lbl">${r.role}</span>${r.chair ? '<b>Chairman</b>' : nameHTML(r.pid)}` : ''}</div></div>`;
     } else if (r.kind === 'section'){
       h += secHead(r.sec);
       if (r.empty) h += `<p class="empty-sec">No parts in this section.</p>`;
     } else if (r.kind === 'remark'){
-      h += `<div class="prow remark"><p style="margin:0"><b>${esc(r.part.title)}</b> <span class="dur">(${r.part.duration} min.)</span></p><div class="names">${nameHTML(r.part.assignee || m.chairman)}</div></div>`;
+      h += `<div class="prow remark"><p style="margin:0"><b>${esc(r.part.title)}</b> <span class="dur">(${r.part.duration} min.)</span></p><div class="names"></div></div>`;
     } else {
       const p = r.part;
       const heading = usesHall2(m, p) && headedSec !== p.section;
@@ -975,8 +978,8 @@ function renderProgram(m){
       const setting = p.section === 'ministry' && p.format ? `${esc(p.format.toUpperCase())}. ` : '';   // legacy
       h += `<div class="part prow ${usesHall2(m, p) ? 'h2row ' : ''}s-${p.section}">
         <div><div class="ptitle">${r.n}. ${esc(p.title)}</div>
-          <div class="pbody">(${p.duration} min.) ${setting}${p.theme ? esc(p.theme) : ''}
-          ${p.notes ? `<div class="pnote">${esc(p.notes)}</div>` : ''}</div></div>
+          <div class="pbody">(${p.duration} min.) ${setting}${p.theme ? esc(p.theme) : ''}${p.type === 'reading' && p.notes ? ` <span class="rnote">${esc(p.notes)}</span>` : ''}
+          ${p.notes && p.type !== 'reading' ? `<div class="pnote">${esc(p.notes)}</div>` : ''}</div></div>
         ${namesHTML(m, p, heading)}</div>`;
     }
   });
@@ -1955,8 +1958,7 @@ async function deleteMeeting(id){
    3.8 PRINT, COPY, SHARE, EXPORT / IMPORT
    ===================================================================== */
 function printMeetingHTML(m){
-  const info = [fmtLong(m.date), fmtTime(meetingTime(m))].map(esc).join(' · ')
-    + ` · Chairman: <b>${esc(pname(m.chairman) || '—')}</b>`
+  const info = `<span class="p-chair">Chairman: <b>${esc(pname(m.chairman) || '—')}</b></span>`
     + (m.secondHall ? ` · Second hall counselor: <b>${esc(pname(m.hall2Counselor) || '—')}</b>` : '');
   return `<section class="p-meet">
     <div class="p-band"><b>${esc(weekLabel(m))}</b><span>${info}</span></div>
@@ -1999,7 +2001,7 @@ function meetingText(m){
     if (r.kind === 'song'){
       if (!r.role){ L.push(songTxt(r.song)); return; }
       if (r.closing) L.push('');
-      L.push(`${songTxt(r.song)} ug Pag-ampo — ${pname(r.pid) || '—'}`);
+      L.push(`${songTxt(r.song)} ug Pag-ampo — ${r.chair ? 'Chairman' : (pname(r.pid) || '—')}`);
       if (r.remark) L.push(`${r.remark.title} (${r.remark.duration} min.)`);
     } else if (r.kind === 'section'){ L.push(''); L.push(r.sec.name.toUpperCase()); }
     else if (r.kind === 'remark') L.push(`${r.part.title} (${r.part.duration} min.)`);
