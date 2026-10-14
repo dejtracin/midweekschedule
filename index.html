@@ -2400,7 +2400,7 @@ function printMeetingHTML(m){
 }
 function printHTML(list){
   return `<div class="p-doc"><header class="p-top"><div class="p-cong">${esc(state.settings.congName)}</div><div class="p-title">Our Christian Life and Ministry — Meeting Schedule</div></header>
-    ${list.map(printMeetingHTML).join('')}<div class="p-foot">Printed ${esc(fmtLong(todayISO()))}</div></div>`;
+    ${list.map(printMeetingHTML).join('')}</div>`;
 }
 function printMeetings(list){
   if (!list.length) return toast('There is no meeting to print.', 'error');
