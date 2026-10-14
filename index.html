@@ -142,6 +142,26 @@ select.input{appearance:none;-webkit-appearance:none;padding-right:32px;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='1.6'/%3E%3C/svg%3E");
   background-repeat:no-repeat;background-position:right 11px center;background-size:12px}
 .grid2{display:grid;grid-template-columns:1fr;gap:12px}
+/* searchable publisher picker */
+.ss-field{position:relative}
+.ss-native{position:absolute!important;opacity:0;pointer-events:none;width:1px!important;height:1px!important;min-height:0!important;padding:0!important;border:0!important;bottom:0;left:0}
+.ss-btn{text-align:left;cursor:pointer;color:var(--text);font:inherit;font-size:16px;padding-right:32px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 11px center;background-size:12px}
+.ss-btn[aria-expanded=true]{border-color:var(--link);box-shadow:0 0 0 2px color-mix(in srgb,var(--link) 25%,transparent)}
+.ss-ph{color:var(--muted)}
+.ss-panel{position:absolute;left:0;top:100%;margin-top:4px;z-index:40;width:100%;background:var(--surface);border:1px solid var(--input);
+  border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,.18);padding:8px}
+.ss-q{min-height:40px}
+.ss-list{max-height:260px;overflow:auto;margin-top:6px;overscroll-behavior:contain}
+.ss-opt{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:9px 10px;border-radius:5px;cursor:pointer;color:var(--text)}
+.ss-opt .ss-info{font-size:13px;color:var(--muted);white-space:nowrap}
+.ss-opt.special .ss-name{color:var(--muted);font-style:italic}
+.ss-opt.act{background:var(--band)}
+.ss-opt.sel .ss-name{font-weight:700}
+.ss-opt.sel::after{content:"✓";color:var(--link);font-weight:700;margin-left:auto;padding-left:6px}
+.ss-group{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:10px 10px 4px;border-top:1px solid var(--line);margin-top:4px}
+.ss-empty{padding:10px;color:var(--muted)}
 .grid3{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .grid3.songs{grid-template-columns:repeat(3,1fr)}
 .grid3.roles{grid-template-columns:1fr}
@@ -1926,9 +1946,116 @@ function renderEditorBody(){
   const b = $('#edBody'); if (!b) return;
   const st = b.scrollTop;
   ed.lastMap = buildLastMap(ed.draft.date, ed.draft.id);
+  ssClose();
   b.innerHTML = editorHTML();
+  enhanceSearchSelects(b);
   b.scrollTop = st;
 }
+/* ---- Searchable publisher picker ----
+   Each publisher <select> in the editor (marked data-search) gets a
+   button that opens a panel with a search box. The real <select> stays
+   in the page (hidden) and still holds the value, so choosing a name
+   just sets it and fires a normal 'change' event. */
+const ssNorm = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function ssParts(text){
+  if (text.startsWith('—')) return {name:text.replace(/^—\s*|\s*—$/g, ''), info:'', special:true};
+  const i = text.lastIndexOf(' — ');
+  return i < 0 ? {name:text, info:''} : {name:text.slice(0, i), info:text.slice(i + 3)};
+}
+function ssLabel(sel){
+  const o = sel.options[sel.selectedIndex];
+  if (!o || !o.value) return '<span class="ss-ph">— Unassigned —</span>';
+  return esc(ssParts(o.text).name);
+}
+function enhanceSearchSelects(root){
+  root.querySelectorAll('select[data-search]:not(.ss-native)').forEach(sel => {
+    sel.classList.add('ss-native'); sel.tabIndex = -1; sel.setAttribute('aria-hidden', 'true');
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'input ss-btn'; btn.setAttribute('aria-haspopup', 'listbox');
+    btn.innerHTML = ssLabel(sel);
+    btn.addEventListener('click', e => { e.preventDefault(); ssOpen(sel, btn); });
+    btn.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' '){ e.preventDefault(); ssOpen(sel, btn); }
+      else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){ e.preventDefault(); ssOpen(sel, btn, e.key); }
+    });
+    sel._ssBtn = btn;
+    sel.parentNode.insertBefore(btn, sel);   // before the select, so tapping the label opens it
+    sel.parentNode.classList.add('ss-field');
+  });
+}
+let ssCur = null;
+function ssClose(focusBtn){
+  if (!ssCur) return;
+  const {panel, btn} = ssCur; ssCur = null;
+  panel.remove(); btn.setAttribute('aria-expanded', 'false');
+  if (focusBtn) btn.focus();
+}
+function ssOpen(sel, btn, firstChar){
+  if (ssCur && ssCur.sel === sel){ ssClose(true); return; }
+  ssClose();
+  const items = [];
+  [...sel.children].forEach(c => {
+    if (c.tagName === 'OPTGROUP'){ items.push({group:c.label}); [...c.children].forEach(o => items.push({o})); }
+    else items.push({o:c});
+  });
+  const panel = document.createElement('div');
+  panel.className = 'ss-panel';
+  panel.innerHTML = `<input class="input ss-q" type="search" placeholder="Search name…" autocomplete="off" spellcheck="false" aria-label="Search name">
+    <div class="ss-list" role="listbox"></div>`;
+  btn.after(panel); btn.setAttribute('aria-expanded', 'true');
+  // Size and place the panel so it never sticks out of the editor window
+  const box = (btn.closest('.modal-body') || document.body).getBoundingClientRect(), f = btn.parentNode.getBoundingClientRect();
+  const w = Math.min(Math.max(f.width, 320), box.width - 16);
+  panel.style.width = w + 'px';
+  panel.style.left = Math.min(0, (box.right - 8) - (f.left + w)) + 'px';
+  const q = panel.querySelector('.ss-q'), list = panel.querySelector('.ss-list');
+  let shown = [], active = 0;
+  const draw = () => {
+    const words = ssNorm(q.value.trim()).split(/\s+/).filter(Boolean);
+    shown = []; let html = '', pendingGroup = null;
+    items.forEach(it => {
+      if (it.group){ pendingGroup = it.group; return; }
+      const parts = ssParts(it.o.text), hay = ssNorm(parts.name);
+      if (words.length && (parts.special || !words.every(w => hay.includes(w)))) return;
+      if (pendingGroup){ html += `<div class="ss-group">${esc(pendingGroup)}</div>`; pendingGroup = null; }
+      const i = shown.length; shown.push(it.o);
+      html += `<div class="ss-opt${it.o.selected ? ' sel' : ''}${parts.special ? ' special' : ''}" role="option" data-i="${i}" aria-selected="${it.o.selected}">
+        <span class="ss-name">${esc(parts.name)}</span>${parts.info ? `<span class="ss-info">${esc(parts.info)}</span>` : ''}</div>`;
+    });
+    list.innerHTML = html || '<div class="ss-empty">No matching name</div>';
+    active = Math.max(0, words.length ? 0 : shown.findIndex(o => o.selected));
+    mark();
+  };
+  const mark = () => {
+    list.querySelectorAll('.ss-opt').forEach(el => el.classList.toggle('act', +el.dataset.i === active));
+    const a = list.querySelector('.ss-opt.act'); if (a) a.scrollIntoView({block:'nearest'});
+  };
+  const pick = o => {
+    if (!o) return;
+    sel.value = o.value; btn.innerHTML = ssLabel(sel);
+    ssClose(true);
+    sel.dispatchEvent(new Event('change', {bubbles:true}));
+  };
+  q.addEventListener('input', draw);
+  q.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown'){ e.preventDefault(); active = Math.min(shown.length - 1, active + 1); mark(); }
+    else if (e.key === 'ArrowUp'){ e.preventDefault(); active = Math.max(0, active - 1); mark(); }
+    else if (e.key === 'Enter'){ e.preventDefault(); pick(shown[active]); }
+    else if (e.key === 'Escape'){ e.preventDefault(); e.stopPropagation(); ssClose(true); }
+    else if (e.key === 'Tab') ssClose();
+  });
+  list.addEventListener('mousedown', e => e.preventDefault());   // keep focus in the search box
+  panel.addEventListener('click', e => e.preventDefault());       // the panel sits inside a <label>: don't let a click re-open it
+  list.addEventListener('click', e => { const el = e.target.closest('.ss-opt'); if (el) pick(shown[+el.dataset.i]); });
+  ssCur = {sel, btn, panel};
+  if (firstChar) q.value = firstChar;
+  draw();
+  q.focus({preventScroll:true});
+  requestAnimationFrame(() => panel.scrollIntoView({block:'nearest', inline:'nearest', behavior:'smooth'}));
+}
+document.addEventListener('mousedown', e => { if (ssCur && !ssCur.panel.contains(e.target) && e.target !== ssCur.btn && !ssCur.btn.contains(e.target)) ssClose(); }, true);
+document.addEventListener('touchstart', e => { if (ssCur && !ssCur.panel.contains(e.target) && !ssCur.btn.contains(e.target)) ssClose(); }, {capture:true, passive:true});
+
 
 /* Publisher <option>s for a role. Eligible publishers first, sorted by
    who has waited longest for that type; ineligible ones only when
@@ -1993,7 +2120,7 @@ function partCardHTML(p, sec, num, movable){
 
   // Right column: assigned publishers
   const showAsst = needsAssistant(p) || p.assistant;
-  const sel = (f, cat, label, onlyBrothers) => `<label class="field"><span>${label}</span><select class="input" data-ped="${f}" data-pid="${p.id}">${pubOptions(p[f], cat, onlyBrothers, true)}</select></label>`;
+  const sel = (f, cat, label, onlyBrothers) => `<label class="field"><span>${label}</span><select class="input" data-search data-ped="${f}" data-pid="${p.id}">${pubOptions(p[f], cat, onlyBrothers, true)}</select></label>`;
   const mainSel = sel('assignee', p.type, h2on ? 'Assigned to' : (brothers ? 'Assigned to (brothers)' : 'Assigned to'), brothers)
     + (showAsst ? sel('assistant', asstCat(p), asstLabel(p), brothers) : '');
   let right = mainSel;
@@ -2018,7 +2145,7 @@ function cbsCardHTML(p, num){
   const sw = `<label class="switch" title="Include this part"><input type="checkbox" data-ped="active" data-pid="${p.id}" ${p.off ? '' : 'checked'}><span></span></label>`;
   const head = `<div class="phead"><span class="num">${num ? num + '.' : ''}</span><div class="fixedtitle">${esc(p.title)}</div>${sw}</div>`;
   if (p.off) return `<div class="pcard s-living off">${head}<p class="muted" style="margin:0;font-size:14px">Switched off — not on the schedule this week.</p></div>`;
-  const sel = (f, cat, label) => `<label class="field"><span>${label}</span><select class="input" data-ped="${f}" data-pid="${p.id}">${pubOptions(p[f], cat, true, true)}</select></label>`;
+  const sel = (f, cat, label) => `<label class="field"><span>${label}</span><select class="input" data-search data-ped="${f}" data-pid="${p.id}">${pubOptions(p[f], cat, true, true)}</select></label>`;
   return `<div class="pcard s-living">${head}
     <div class="pcols">
       <div class="lcol"><div class="field"><span>Length</span><div class="fixedval">${p.duration} min.</div></div>${inputField(p, 'notes', 'Notes / material')}</div>
@@ -2038,7 +2165,7 @@ function hall2PanelHTML(d){
       <div><b>Second hall is on</b><div class="muted" style="font-size:14px">Assign second-hall students in the Bible reading and field ministry parts below.</div></div>
       <button class="btn danger sm" data-action="edHall2" data-on="0">Remove second hall</button>
     </div>
-    <label class="field" style="margin-top:10px"><span>Second hall counselor</span><select class="input" data-ed="hall2Counselor">${pubOptions(d.hall2Counselor, 'counselor', true)}</select></label>
+    <label class="field" style="margin-top:10px"><span>Second hall counselor</span><select class="input" data-search data-ed="hall2Counselor">${pubOptions(d.hall2Counselor, 'counselor', true)}</select></label>
   </div>`;
 }
 function editorHTML(){
@@ -2068,9 +2195,9 @@ function editorHTML(){
     <label class="field"><span>Closing song</span><input class="input" type="number" inputmode="numeric" min="1" max="999" data-ed="song.closing" value="${d.songs.closing}"></label>
   </div>
   <div class="grid3 roles" style="margin-top:12px">
-    <label class="field"><span>Chairman</span><select class="input" data-ed="chairman">${pubOptions(d.chairman, 'chairman')}</select></label>
-    <label class="field"><span>Opening prayer</span><select class="input" data-ed="openingPrayer">${pubOptions(d.openingPrayer, 'prayer', false, false, true)}</select></label>
-    <label class="field"><span>Closing prayer</span><select class="input" data-ed="closingPrayer">${pubOptions(d.closingPrayer, 'prayer', false, false, true)}</select></label>
+    <label class="field"><span>Chairman</span><select class="input" data-search data-ed="chairman">${pubOptions(d.chairman, 'chairman')}</select></label>
+    <label class="field"><span>Opening prayer</span><select class="input" data-search data-ed="openingPrayer">${pubOptions(d.openingPrayer, 'prayer', false, false, true)}</select></label>
+    <label class="field"><span>Closing prayer</span><select class="input" data-search data-ed="closingPrayer">${pubOptions(d.closingPrayer, 'prayer', false, false, true)}</select></label>
   </div>
   ${hall2PanelHTML(d)}
   <label class="field" style="margin-top:12px"><span>Notes or special instructions</span><textarea class="input" data-ed="notes" maxlength="2000">${esc(d.notes)}</textarea></label>
@@ -2492,7 +2619,7 @@ const actions = {
       target.scrollIntoView({block:'center', behavior:'smooth'});
       const box = target.closest('.field') || target;
       box.classList.remove('flash'); void box.offsetWidth; box.classList.add('flash');
-      try { target.focus({preventScroll:true}); } catch (e) {}
+      try { (target._ssBtn || target).focus({preventScroll:true}); } catch (e) {}
     }, 60);
   },
   edShowAll: el => { ed.showAll = el.checked; renderEditorBody(); },
