@@ -448,6 +448,8 @@ textarea.input.details{min-height:96px}
 .ovl-page:last-child{break-after:auto;page-break-after:auto}
 .ovl-pos{position:absolute}
 .sf-lead{margin:0 0 12px}
+.sf-layouts button{display:flex;flex-direction:column;align-items:center;gap:1px;line-height:1.2;padding:8px 6px}
+.sf-layouts small{font-size:12px;font-weight:500;opacity:.85}
 .sf-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-top:12px}
 .sf-tip{font-size:14px;margin:6px 0 0}
 .sf-stage{margin:14px 0 4px;padding:12px;background:var(--band);border-radius:var(--radius);display:flex;justify-content:center}
@@ -692,28 +694,63 @@ function defaultTemplate(){
   ].map(([section,title,type,format,duration]) => ({id:uid(),section,title,type,format,duration,assignee:'',assistant:'',notes:''}));
 }
 /* Pre-printed slips: where each piece of text goes on the user's own
-   hard-copy S-89 slip. All positions are millimetres from the slip's
-   top-left corner (the top-left of the text). */
-const SF_FIELDS = [['name','Name'],['assistant','Assistant'],['date','Date'],['part','Part no.'],
-  ['hall1','Tick: Main hall'],['hall2','Tick: Auxiliary classroom 1'],['hall3','Tick: Auxiliary classroom 2']];
+   hard-copy S-89 slips. There are two physical slips in use, each with its
+   own fixed size, its own fields and its own saved positions. Positions are
+   millimetres from the slip's top-left corner to the top-left of the text.
+   kind: 'text' one line, 'wrap' may wrap to a second line, 'tick' a ✓ mark. */
+const SLIP_LAYOUTS = {
+  current:{name:'Current slip', w:80, h:110, size:10, fields:[
+    ['name','Name','text',17,22.9], ['assistant','Assistant','text',23.5,29.9], ['date','Date','text',15,36.9],
+    ['part','Part no.','wrap',21,43.9],
+    ['hall1','Tick: Main hall','tick',7.5,57.9], ['hall2','Tick: Auxiliary classroom 1','tick',7.5,62.4], ['hall3','Tick: Auxiliary classroom 2','tick',7.5,66.9]]},
+  older:{name:'Older slip', w:90, h:140, size:11, fields:[   // measured from the S-89-E 10/15 slip
+    ['name','Name','text',19.5,30.3], ['assistant','Assistant','text',26.5,39.3], ['date','Date','text',17.5,48.5],
+    ['counsel','Counsel point','text',37.3,57.6],
+    ['asgReading','Tick: Bible reading','tick',8.9,72.7], ['asgInitial','Tick: Initial call','tick',8.9,77.3],
+    ['asgReturn','Tick: Return visit','tick',8.9,81.8], ['asgStudy','Tick: Bible study','tick',8.9,86.5],
+    ['asgOther','Tick: Other','tick',8.9,91.1], ['other','Other: (part name)','text',26,90.7],
+    ['hall1','Tick: Main hall','tick',47.5,73.1], ['hall2','Tick: Auxiliary classroom 1','tick',47.5,77.7], ['hall3','Tick: Auxiliary classroom 2','tick',47.5,82.3]]}
+};
+const SLIP_LAYOUT_IDS = Object.keys(SLIP_LAYOUTS);
 const SF_PAPERS = {a4:{w:210, h:297, name:'A4'}, letter:{w:215.9, h:279.4, name:'Letter'}};
-const SLIP_PHOTO_KEY = 'clm-schedule-slip-photo';   // photo of a blank slip, this device only
+const SLIP_PHOTO_KEY = 'clm-schedule-slip-photo';   // + '-' + layout: photo of a blank slip, this device only
+const photoKey = id => SLIP_PHOTO_KEY + '-' + id;
 const PXMM = 96 / 25.4;                             // CSS pixels per millimetre
-function defaultSlipFill(){
-  return {mode:'plain', setup:false, w:105, h:148, paper:'slip', dx:0, dy:0, size:11,
-    f:{name:{x:25,y:22}, assistant:{x:35,y:31.5}, date:{x:22,y:41}, part:{x:30,y:50.5},
-       hall1:{x:14,y:69}, hall2:{x:14,y:76}, hall3:{x:14,y:83}}};
-}
 const fnum = (v, min, max, d) => { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(Math.min(max, Math.max(min, n)) * 10) / 10 : d; };
+const slipSizeLabel = id => `${SLIP_LAYOUTS[id].w} × ${SLIP_LAYOUTS[id].h} mm`;
+function defaultSlipLayout(id){
+  const L = SLIP_LAYOUTS[id], f = {};
+  L.fields.forEach(([fid, , , x, y]) => { f[fid] = {x, y}; });
+  return {size:L.size, dx:0, dy:0, f};
+}
+function defaultSlipFill(){
+  const layouts = {}; SLIP_LAYOUT_IDS.forEach(id => { layouts[id] = defaultSlipLayout(id); });
+  return {mode:'plain', setup:false, paper:'slip', layout:'current', layouts};
+}
 function normSlipFill(o){
-  const d = defaultSlipFill();
-  if (!o || typeof o !== 'object') return d;
-  const r = {mode:o.mode === 'overlay' ? 'overlay' : 'plain', setup:!!o.setup,
-    w:fnum(o.w,40,300,d.w), h:fnum(o.h,40,300,d.h), paper:['slip','a4','letter'].includes(o.paper) ? o.paper : 'slip',
-    dx:fnum(o.dx,-50,250,0), dy:fnum(o.dy,-50,250,0), size:fnum(o.size,6,18,d.size), f:{}};
-  SF_FIELDS.forEach(([id]) => { const f = (o.f && o.f[id]) || {};
-    r.f[id] = {x:fnum(f.x,0,r.w,Math.min(d.f[id].x, r.w)), y:fnum(f.y,0,r.h,Math.min(d.f[id].y, r.h))}; });
+  const r = defaultSlipFill();
+  if (!o || typeof o !== 'object') return r;
+  r.mode = o.mode === 'overlay' ? 'overlay' : 'plain';
+  r.paper = ['slip','a4','letter'].includes(o.paper) ? o.paper : 'slip';
+  r.layout = SLIP_LAYOUT_IDS.includes(o.layout) ? o.layout : 'current';
+  // Settings from before there were two slip types used a free slip size: start fresh.
+  if (!o.layouts || typeof o.layouts !== 'object') return r;
+  r.setup = !!o.setup;
+  SLIP_LAYOUT_IDS.forEach(id => {
+    const L = SLIP_LAYOUTS[id], src = o.layouts[id], dst = r.layouts[id];
+    if (!src || typeof src !== 'object') return;
+    dst.size = fnum(src.size, 6, 18, L.size); dst.dx = fnum(src.dx, -50, 250, 0); dst.dy = fnum(src.dy, -50, 250, 0);
+    L.fields.forEach(([fid]) => { const f = (src.f && src.f[fid]) || {};
+      dst.f[fid] = {x:fnum(f.x, 0, L.w, dst.f[fid].x), y:fnum(f.y, 0, L.h, dst.f[fid].y)}; });
+  });
   return r;
+}
+/* Everything needed to draw/print one layout: its fixed size and fields,
+   plus the user's text size, shift and positions for it. */
+function slipGeom(sf, id){
+  id = id || sf.layout;
+  const L = SLIP_LAYOUTS[id], u = sf.layouts[id];
+  return {id, name:L.name, w:L.w, h:L.h, fields:L.fields, size:u.size, dx:u.dx, dy:u.dy, f:u.f, paper:sf.paper};
 }
 function defaultSettings(){
   return {slipFill:defaultSlipFill(), congName:'My Congregation', logoText:'', logoImage:'', meetingDay:3, meetingTime:'19:00', duration:105,
@@ -1648,7 +1685,7 @@ function printSlips(items){
   if (sf.mode === 'overlay'){
     // One slip per sheet: the student's, then the assistant's copy (if any and switched on)
     const vals = items.flatMap(it => state.settings.slipCopies && realId(it.assistant) ? [fillValues(it), fillValues(it)] : [fillValues(it)]);
-    return printOverlay(vals, sf, false);
+    return printOverlay(vals, slipGeom(sf), false);
   }
   setPageCSS('');
   // Each student's slip, followed by a copy for the assistant (if any and if switched on)
@@ -1658,44 +1695,54 @@ function printSlips(items){
   setTimeout(() => window.print(), 60);
 }
 /* ---- Printing on the user's own pre-printed slips ----
-   Only the fill-in text is printed (no headings, lines or boxes). */
+   Only the fill-in text is printed (no headings, lines or boxes). Values
+   for every field of both layouts; each layout prints only its own fields. */
+const OLD_SLIP_TYPES = {reading:'asgReading', starting:'asgInitial', following:'asgReturn', disciples:'asgStudy'};
+function counselPoint(p){ const m = /\(([^()]*)\)\s*$/.exec(p.theme || ''); return m ? m[1].trim() : ''; }
 function fillValues(it){
+  const kind = OLD_SLIP_TYPES[it.p.type] || 'asgOther';
   return {name:pname(it.student), assistant:realId(it.assistant) ? pname(it.assistant) : '', date:weekLabel(it.m),
-    part:(it.num ? it.num + '. ' : '') + it.p.title, hall1:it.hall === 1 ? '✓' : '', hall2:it.hall === 2 ? '✓' : '', hall3:''};
+    part:(it.num ? it.num + '. ' : '') + it.p.title, counsel:counselPoint(it.p),
+    asgReading:kind === 'asgReading' ? '✓' : '', asgInitial:kind === 'asgInitial' ? '✓' : '', asgReturn:kind === 'asgReturn' ? '✓' : '',
+    asgStudy:kind === 'asgStudy' ? '✓' : '', asgOther:kind === 'asgOther' ? '✓' : '', other:kind === 'asgOther' ? it.p.title : '',
+    hall1:it.hall === 1 ? '✓' : '', hall2:it.hall === 2 ? '✓' : '', hall3:''};
 }
 function sampleFill(){
   const it = slipWeekMeetings().flatMap(slipItems).find(slipReady);
-  return it ? Object.assign(fillValues(it), {assistant:fillValues(it).assistant || 'Assistant name'})
-    : {name:'Juan Dela Cruz', assistant:'Pedro Santos', date:'OKTUBRE 19-25', part:'4. Dihang Magsugod ug Panag-estorya', hall1:'✓', hall2:'', hall3:''};
+  if (it){ const v = fillValues(it); return Object.assign(v, {assistant:v.assistant || 'Assistant name', counsel:v.counsel || 'Counsel point'}); }
+  return {name:'Juan Dela Cruz', assistant:'Pedro Santos', date:'OKTUBRE 19-25', part:'4. Dihang Magsugod ug Panag-estorya', counsel:'lmd lesson 1 point 3',
+    asgReading:'', asgInitial:'✓', asgReturn:'', asgStudy:'', asgOther:'', other:'', hall1:'✓', hall2:'', hall3:''};
 }
-/* One slip's text, positioned in mm. o.edit = draggable editor view,
-   o.photo = on-screen background photo, o.guide = dashed slip outline. */
-function overlayHTML(v, sf, o = {}){
-  const fields = SF_FIELDS.map(([id, label]) => {
-    const p = sf.f[id], tick = id.startsWith('hall');
-    let txt = v[id] || '', cls = 'ovl-f ovl-' + (tick ? 'tick' : id);
+/* One slip's text, positioned in mm, for layout geometry g (see slipGeom).
+   o.edit = draggable editor view, o.photo = on-screen background photo,
+   o.guide = dashed slip outline. */
+function overlayHTML(v, g, o = {}){
+  const fields = g.fields.map(([id, label, kind]) => {
+    const p = g.f[id], tick = kind === 'tick';
+    let txt = v[id] || '', cls = 'ovl-f ' + (tick ? 'ovl-tick' : kind === 'wrap' ? 'ovl-part' : 'ovl-' + id);
     if (!txt){ if (!o.edit) return ''; txt = tick ? '✓' : label; cls += ' sf-ghost'; }
-    let html = esc(txt); if (id === 'part') html = html.replace(/-/g, '\u2011');
-    const width = id === 'part' ? `width:${Math.max(10, sf.w - p.x - 3)}mm;` : '';
+    let html = esc(txt); if (kind === 'wrap') html = html.replace(/-/g, '\u2011');
+    const width = kind === 'wrap' ? `width:${Math.max(10, g.w - p.x - 3)}mm;` : '';
     const ed = o.edit ? ` tabindex="0" role="button" aria-label="${esc(label)}: drag onto its line"` : '';
     return `<div class="${cls}${o.sel === id ? ' sel' : ''}" data-f="${id}"${ed} style="left:${p.x}mm;top:${p.y}mm;${width}">${html}</div>`;
   }).join('');
-  return `<div class="ovl-slip${o.guide ? ' guide' : ''}${o.edit ? ' sf-edit' : ''}" style="width:${sf.w}mm;height:${sf.h}mm;font-size:${sf.size}pt">${o.photo ? `<img class="ovl-photo" src="${o.photo}" alt="">` : ''}${fields}</div>`;
+  return `<div class="ovl-slip${o.guide ? ' guide' : ''}${o.edit ? ' sf-edit' : ''}" style="width:${g.w}mm;height:${g.h}mm;font-size:${g.size}pt">${o.photo ? `<img class="ovl-photo" src="${o.photo}" alt="">` : ''}${fields}</div>`;
 }
 /* The slip drawn at a screen-friendly scale (for previews and the editor). */
-function scaledSlipHTML(inner, sf, maxW, maxH){
-  const k = Math.min(maxW / (sf.w * PXMM), maxH / (sf.h * PXMM), 2);
-  return {k, html:`<div class="sf-box" style="width:${sf.w * PXMM * k}px;height:${sf.h * PXMM * k}px"><div class="sf-scale" style="transform:scale(${k})">${inner}</div></div>`};
+function scaledSlipHTML(inner, g, maxW, maxH){
+  const k = Math.min(maxW / (g.w * PXMM), maxH / (g.h * PXMM), 2);
+  return {k, html:`<div class="sf-box" style="width:${g.w * PXMM * k}px;height:${g.h * PXMM * k}px"><div class="sf-scale" style="transform:scale(${k})">${inner}</div></div>`};
 }
-const paperOf = sf => sf.paper === 'slip' ? {w:sf.w, h:sf.h} : SF_PAPERS[sf.paper];
+const paperOf = g => g.paper === 'slip' ? {w:g.w, h:g.h} : SF_PAPERS[g.paper];
 function setPageCSS(css){
   let el = document.getElementById('pagePrintCSS');
   if (!el){ el = document.createElement('style'); el.id = 'pagePrintCSS'; document.head.appendChild(el); }
   el.textContent = css;
 }
-function printOverlay(vals, sf, guide){
-  const P = paperOf(sf);
-  $('#printArea').innerHTML = vals.map(v => `<div class="ovl-page" style="width:${P.w}mm;height:${P.h}mm"><div class="ovl-pos" style="left:${sf.dx}mm;top:${sf.dy}mm">${overlayHTML(v, sf, {guide})}</div></div>`).join('');
+/* Each value set becomes one page, sized to the chosen slip (or A4/Letter). */
+function printOverlay(vals, g, guide){
+  const P = paperOf(g);
+  $('#printArea').innerHTML = vals.map(v => `<div class="ovl-page" style="width:${P.w}mm;height:${P.h}mm"><div class="ovl-pos" style="left:${g.dx}mm;top:${g.dy}mm">${overlayHTML(v, g, {guide})}</div></div>`).join('');
   setPageCSS(`@page{size:${P.w}mm ${P.h}mm;margin:0}`);
   document.body.classList.add('printing');
   setTimeout(() => window.print(), 60);
@@ -1717,61 +1764,75 @@ function loadSlipPhoto(file, done){
   };
   r.readAsDataURL(file);
 }
-const paperTip = sf => sf.paper === 'slip'
-  ? 'Feed one blank slip at a time (usually through the manual or rear tray). In the print dialog choose a paper size that matches the slip, scale 100%, margins none.'
-  : `Tape a blank slip into the top-left corner of an ${SF_PAPERS[sf.paper].name} sheet and print on the sheet. In the print dialog choose ${SF_PAPERS[sf.paper].name}, scale 100%, margins none.`;
+const paperTip = g => g.paper === 'slip'
+  ? `Feed one blank slip at a time (usually through the manual or rear tray). In the print dialog choose a custom paper size of ${g.w} × ${g.h} mm if asked, scale 100%, margins none.`
+  : `Tape a blank slip into the top-left corner of an ${SF_PAPERS[g.paper].name} sheet and print on the sheet. In the print dialog choose ${SF_PAPERS[g.paper].name}, scale 100%, margins none.`;
 
-/* Set-up screen: slip size, paper, and drag each item onto its line. */
+/* Set-up screen: which slip, paper, and drag each item onto its line. */
 function openSlipSetup(){
   const d = clone(state.settings.slipFill), sample = sampleFill();
-  let sel = 'name', k = 1, photo = lsGet(SLIP_PHOTO_KEY) || '';
-  const num = (key, label, step) => `<label class="field"><span>${label}</span><input class="input" type="number" inputmode="decimal" step="${step}" data-sf="${key}" value="${d[key]}"></label>`;
+  const G = () => slipGeom(d), U = () => d.layouts[d.layout];
+  let sel = 'name', k = 1, photo = lsGet(photoKey(d.layout)) || '';
+  const num = (key, label) => `<label class="field"><span>${label}</span><input class="input" type="number" inputmode="decimal" step="0.5" data-sf="${key}" value="${U()[key]}"></label>`;
   const layer = openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-label="Set up your printed slips">
     <div class="modal-head"><h2>Set up your printed slips</h2></div>
     <div class="modal-body">
-      <p class="sf-lead">Only the names and details are printed, so they land on the blank lines of your hard-copy S-89 slips. Measure one slip, then drag each item onto its line.</p>
-      <div class="sf-row">${num('w', 'Slip width (mm)', 0.5)}${num('h', 'Slip height (mm)', 0.5)}${num('size', 'Text size (pt)', 0.5)}</div>
+      <p class="sf-lead">Only the names and details are printed, so they land on the blank lines of your hard-copy S-89 slips. Choose the slip you have, then check each item sits on its line.</p>
+      <div class="field"><span>Which slip are you using?</span>
+        <div class="seg sf-layouts" role="group" aria-label="Slip type">${SLIP_LAYOUT_IDS.map(id =>
+          `<button type="button" data-sfl="${id}" class="${d.layout === id ? 'on' : ''}" aria-pressed="${d.layout === id}">${esc(SLIP_LAYOUTS[id].name)}<small>${slipSizeLabel(id)}</small></button>`).join('')}</div></div>
       <div class="field" style="margin-top:14px"><span>What goes into the printer</span>
         <div class="seg" role="group" aria-label="Paper in the printer">${[['slip', 'The slip itself'], ['a4', 'Slip on A4 sheet'], ['letter', 'Slip on Letter sheet']].map(([v, l]) =>
           `<button type="button" data-sfp="${v}" class="${d.paper === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
-      <p class="muted sf-tip" id="sfPaperTip">${esc(paperTip(d))}</p>
-      <div class="sf-row">${num('dx', 'Move all text right (mm)', 0.5)}${num('dy', 'Move all text down (mm)', 0.5)}</div>
+      <p class="muted sf-tip" id="sfPaperTip"></p>
+      <div class="sf-row">${num('size', 'Text size (pt)')}${num('dx', 'Move all text right (mm)')}${num('dy', 'Move all text down (mm)')}</div>
       <div class="sf-stage" id="sfStage"></div>
       <div class="sf-sel">
-        <label class="field"><span>Item</span><select class="input" id="sfSel">${SF_FIELDS.map(([id, l]) => `<option value="${id}">${esc(l)}</option>`).join('')}</select></label>
+        <label class="field"><span>Item</span><select class="input" id="sfSel"></select></label>
         <label class="field"><span>From left (mm)</span><input class="input" type="number" inputmode="decimal" step="0.5" id="sfX"></label>
         <label class="field"><span>From top (mm)</span><input class="input" type="number" inputmode="decimal" step="0.5" id="sfY"></label>
       </div>
-      <p class="muted sf-tip">Drag an item, or select it and use the arrow keys (hold Shift for 5 mm steps). Positions are measured to the top-left of the text.</p>
+      <p class="muted sf-tip">Drag an item, or select it and use the arrow keys (hold Shift for 5 mm steps). Each slip type keeps its own positions.</p>
       <div class="btnrow" style="margin-top:12px" id="sfPhotoRow"></div>
       <input type="file" accept="image/*" id="sfPhotoFile" hidden>
     </div>
     <div class="modal-foot"><button class="btn" data-sfa="test">${ICON.print}Print test</button><span style="flex:1"></span>
       <button class="btn" data-sfa="cancel">Cancel</button><button class="btn primary" data-sfa="save">Save layout</button></div></div>`);
   const stage = layer.querySelector('#sfStage'), selEl = layer.querySelector('#sfSel'), xEl = layer.querySelector('#sfX'), yEl = layer.querySelector('#sfY');
-  const syncSel = () => { selEl.value = sel; xEl.value = d.f[sel].x; yEl.value = d.f[sel].y; };
+  const syncSel = () => { selEl.value = sel; xEl.value = U().f[sel].x; yEl.value = U().f[sel].y; };
   const drawPhotoRow = () => { layer.querySelector('#sfPhotoRow').innerHTML =
     `<button class="btn sm" data-sfa="photo">${photo ? 'Replace photo' : 'Add photo of a blank slip'}</button>` +
     (photo ? `<button class="btn sm danger" data-sfa="nophoto">Remove photo</button>` : '') +
     `<button class="btn sm" data-sfa="reset">Reset positions</button>` +
     (photo ? '' : `<span class="muted sf-tip" style="margin:0">A photo cropped to the slip’s edges shows its lines here (on screen only).</span>`); };
   const draw = () => {
-    const r = scaledSlipHTML(overlayHTML(sample, d, {edit:true, photo, sel, guide:!photo}), d, stage.clientWidth - 24, Math.max(280, window.innerHeight * .55));
+    const r = scaledSlipHTML(overlayHTML(sample, G(), {edit:true, photo, sel, guide:!photo}), G(), stage.clientWidth - 24, Math.max(280, window.innerHeight * .55));
     k = r.k; stage.innerHTML = r.html; syncSel();
   };
+  // Everything that depends on which slip is chosen
+  const showLayout = () => {
+    const g = G();
+    if (!g.f[sel]) sel = 'name';
+    selEl.innerHTML = g.fields.map(([id, l]) => `<option value="${id}">${esc(l)}</option>`).join('');
+    layer.querySelectorAll('[data-sf]').forEach(i => { i.value = U()[i.dataset.sf]; });
+    layer.querySelectorAll('[data-sfl]').forEach(b => { const on = b.dataset.sfl === d.layout; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    layer.querySelector('#sfPaperTip').textContent = paperTip(g);
+    photo = lsGet(photoKey(d.layout)) || '';
+    draw(); drawPhotoRow();
+  };
   const setPos = (id, x, y) => {
-    const f = d.f[id]; f.x = fnum(Math.round(x * 2) / 2, 0, d.w, f.x); f.y = fnum(Math.round(y * 2) / 2, 0, d.h, f.y);
+    const g = G(), f = g.f[id]; f.x = fnum(Math.round(x * 2) / 2, 0, g.w, f.x); f.y = fnum(Math.round(y * 2) / 2, 0, g.h, f.y);
     const el = stage.querySelector(`[data-f="${id}"]`);
-    if (el){ el.style.left = f.x + 'mm'; el.style.top = f.y + 'mm'; if (id === 'part') el.style.width = Math.max(10, d.w - f.x - 3) + 'mm'; }
+    if (el){ el.style.left = f.x + 'mm'; el.style.top = f.y + 'mm'; if (el.classList.contains('ovl-part')) el.style.width = Math.max(10, g.w - f.x - 3) + 'mm'; }
     if (id === sel) syncSel();
   };
   const select = id => { sel = id; stage.querySelectorAll('.ovl-f').forEach(el => el.classList.toggle('sel', el.dataset.f === id)); syncSel(); };
-  draw(); drawPhotoRow();
+  showLayout();
 
   stage.addEventListener('pointerdown', e => {
     const el = e.target.closest('.ovl-f'); if (!el) return;
     e.preventDefault(); el.focus({preventScroll:true});
-    const id = el.dataset.f, st = {x:e.clientX, y:e.clientY, fx:d.f[id].x, fy:d.f[id].y};
+    const id = el.dataset.f, f = U().f[id], st = {x:e.clientX, y:e.clientY, fx:f.x, fy:f.y};
     select(id); el.setPointerCapture(e.pointerId);
     const move = ev => setPos(id, st.fx + (ev.clientX - st.x) / (PXMM * k), st.fy + (ev.clientY - st.y) / (PXMM * k));
     const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); };
@@ -1782,46 +1843,46 @@ function openSlipSetup(){
     const step = e.shiftKey ? 5 : 0.5, mv = {ArrowLeft:[-step, 0], ArrowRight:[step, 0], ArrowUp:[0, -step], ArrowDown:[0, step]}[e.key];
     if (!mv) return;
     e.preventDefault(); const id = el.dataset.f; if (id !== sel) select(id);
-    setPos(id, d.f[id].x + mv[0], d.f[id].y + mv[1]);
+    const f = U().f[id]; setPos(id, f.x + mv[0], f.y + mv[1]);
   });
   stage.addEventListener('focusin', e => { const el = e.target.closest('.ovl-f'); if (el && el.dataset.f !== sel) select(el.dataset.f); });
 
+  const LIM = {size:[6, 18], dx:[-50, 250], dy:[-50, 250]};
   layer.addEventListener('input', e => {
     const t = e.target;
     if (t.dataset.sf){
-      const lim = {w:[40, 300], h:[40, 300], size:[6, 18], dx:[-50, 250], dy:[-50, 250]}[t.dataset.sf];
-      const n = parseFloat(t.value); if (!Number.isFinite(n) || n < lim[0] || n > lim[1]) return;
-      d[t.dataset.sf] = n;
-      if (t.dataset.sf === 'w' || t.dataset.sf === 'h') SF_FIELDS.forEach(([id]) => { d.f[id].x = Math.min(d.f[id].x, d.w); d.f[id].y = Math.min(d.f[id].y, d.h); });
-      if (t.dataset.sf !== 'dx' && t.dataset.sf !== 'dy') draw();
+      const lim = LIM[t.dataset.sf], n = parseFloat(t.value); if (!Number.isFinite(n) || n < lim[0] || n > lim[1]) return;
+      U()[t.dataset.sf] = n; if (t.dataset.sf === 'size') draw();
     } else if (t === xEl || t === yEl){
       const n = parseFloat(t.value); if (!Number.isFinite(n)) return;
-      setPos(sel, t === xEl ? n : d.f[sel].x, t === yEl ? n : d.f[sel].y);
+      const f = U().f[sel]; setPos(sel, t === xEl ? n : f.x, t === yEl ? n : f.y);
     }
   });
   layer.addEventListener('change', e => {
     const t = e.target;
-    if (t.dataset.sf){ const lim = {w:[40, 300], h:[40, 300], size:[6, 18], dx:[-50, 250], dy:[-50, 250]}[t.dataset.sf];
-      d[t.dataset.sf] = fnum(t.value, lim[0], lim[1], d[t.dataset.sf]); t.value = d[t.dataset.sf]; draw(); }
+    if (t.dataset.sf){ const lim = LIM[t.dataset.sf]; U()[t.dataset.sf] = fnum(t.value, lim[0], lim[1], U()[t.dataset.sf]); t.value = U()[t.dataset.sf]; draw(); }
     else if (t === xEl || t === yEl) syncSel();
     else if (t === selEl) select(t.value);
     else if (t.id === 'sfPhotoFile'){
-      loadSlipPhoto(t.files[0], url => { photo = url; lsSet(SLIP_PHOTO_KEY, url); if ((lsGet(SLIP_PHOTO_KEY) || '') !== url) toast('The photo is too large to keep, but it is shown for now.', 'error'); draw(); drawPhotoRow(); });
+      const key = photoKey(d.layout);
+      loadSlipPhoto(t.files[0], url => { photo = url; lsSet(key, url); if ((lsGet(key) || '') !== url) toast('The photo is too large to keep, but it is shown for now.', 'error'); draw(); drawPhotoRow(); });
       t.value = '';
     }
   });
   layer.addEventListener('click', e => {
+    const l = e.target.closest('[data-sfl]');
+    if (l){ if (l.dataset.sfl !== d.layout){ d.layout = l.dataset.sfl; showLayout(); } return; }
     const p = e.target.closest('[data-sfp]');
     if (p){ d.paper = p.dataset.sfp; layer.querySelectorAll('[data-sfp]').forEach(b => b.classList.toggle('on', b === p));
-      layer.querySelector('#sfPaperTip').textContent = paperTip(d); return; }
+      layer.querySelector('#sfPaperTip').textContent = paperTip(G()); return; }
     const b = e.target.closest('[data-sfa]'); if (!b) return;
     const a = b.dataset.sfa;
     if (a === 'cancel') closeLayer(layer);
-    else if (a === 'save'){ d.setup = true; d.mode = 'overlay'; state.settings.slipFill = normSlipFill(d); save('Slip layout saved'); closeLayer(layer); render(); }
-    else if (a === 'test') printOverlay([sample], normSlipFill(d), true);
-    else if (a === 'reset'){ d.f = defaultSlipFill().f; draw(); }
+    else if (a === 'save'){ d.setup = true; d.mode = 'overlay'; state.settings.slipFill = normSlipFill(d); save(`Saved: ${SLIP_LAYOUTS[d.layout].name.toLowerCase()} (${slipSizeLabel(d.layout)})`); closeLayer(layer); render(); }
+    else if (a === 'test') printOverlay([sample], slipGeom(normSlipFill(d)), true);
+    else if (a === 'reset'){ U().f = defaultSlipLayout(d.layout).f; draw(); }
     else if (a === 'photo') layer.querySelector('#sfPhotoFile').click();
-    else if (a === 'nophoto'){ photo = ''; lsSet(SLIP_PHOTO_KEY, null); draw(); drawPhotoRow(); }
+    else if (a === 'nophoto'){ photo = ''; lsSet(photoKey(d.layout), null); draw(); drawPhotoRow(); }
   });
 }
 
@@ -1853,7 +1914,7 @@ function viewSlips(){
     <div class="wrap">${nav}
       <div class="btnrow" style="margin-bottom:6px"><button class="btn sm" data-action="slipSelAll" data-v="1">Select all</button><button class="btn sm" data-action="slipSelAll" data-v="0">Select none</button>
         <span class="muted" style="font-size:14px">${state.settings.slipFill.mode === 'overlay'
-          ? `Tick the slips to print — names and details only, ${state.settings.slipFill.paper === 'slip' ? 'each on its own blank slip' : 'one slip per ' + SF_PAPERS[state.settings.slipFill.paper].name + ' sheet'}.`
+          ? `Tick the slips to print — names and details only, for the ${SLIP_LAYOUTS[state.settings.slipFill.layout].name.toLowerCase()} (${slipSizeLabel(state.settings.slipFill.layout)}), ${state.settings.slipFill.paper === 'slip' ? 'each on its own blank slip' : 'one per ' + SF_PAPERS[state.settings.slipFill.paper].name + ' sheet'}.`
           : 'Tick the slips to print — full slip layout, 4 per A4 page.'}</span></div>
       <div class="slipmode"><div class="seg" role="group" aria-label="Print on">${[['plain', 'Plain paper'], ['overlay', 'My printed slips']].map(([v, l]) =>
         `<button type="button" data-action="slipMode" data-v="${v}" class="${state.settings.slipFill.mode === v ? 'on' : ''}" aria-pressed="${state.settings.slipFill.mode === v}">${l}</button>`).join('')}</div>
@@ -2823,9 +2884,9 @@ const actions = {
   slipPreview: el => {
     const it = findSlip(el.dataset.key); if (!it) return;
     let layer;
-    const sf = state.settings.slipFill, photo = sf.mode === 'overlay' ? lsGet(SLIP_PHOTO_KEY) || '' : '';
+    const sf = state.settings.slipFill, g = slipGeom(sf), photo = sf.mode === 'overlay' ? lsGet(photoKey(g.id)) || '' : '';
     const body = sf.mode === 'overlay'
-      ? `<p class="muted sf-tip" style="margin:0 0 10px">Only the dark text is printed onto your slip.</p><div class="sf-stage" style="margin:0">${scaledSlipHTML(overlayHTML(fillValues(it), sf, {photo, guide:!photo}), sf, Math.min(window.innerWidth - 90, 400), window.innerHeight * .6).html}</div>`
+      ? `<p class="muted sf-tip" style="margin:0 0 10px">${esc(g.name)} (${slipSizeLabel(g.id)}). Only the dark text is printed onto your slip.</p><div class="sf-stage" style="margin:0">${scaledSlipHTML(overlayHTML(fillValues(it), g, {photo, guide:!photo}), g, Math.min(window.innerWidth - 90, 400), window.innerHeight * .6).html}</div>`
       : `<div class="slip-preview">${slipHTML(it)}</div>`;
     layer = openLayer(`<div class="modal dialog" role="dialog" aria-modal="true" aria-label="Assignment slip">
       <div class="modal-body">${body}</div>
