@@ -31,7 +31,7 @@
        3.6 views: home, schedule (week/month/list/publisher), publishers,
            planner, settings
        3.7 meeting editor, publisher editor
-       3.8 print, copy, share, CSV/JSON export & import
+       3.8 print, image (PNG), copy, share, CSV/JSON export & import
        3.9 event wiring & startup
 -->
 <style>
@@ -154,8 +154,9 @@ select.input{appearance:none;-webkit-appearance:none;padding-right:32px;
   border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,.18);padding:8px}
 .ss-q{min-height:40px}
 .ss-list{max-height:260px;overflow:auto;margin-top:6px;overscroll-behavior:contain}
-.ss-opt{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:9px 10px;border-radius:5px;cursor:pointer;color:var(--text)}
+.ss-opt{display:flex;justify-content:flex-start;align-items:baseline;gap:10px;padding:9px 10px;border-radius:5px;cursor:pointer;color:var(--text)}
 .ss-opt .ss-info{font-size:13px;color:var(--muted);white-space:nowrap}
+.ss-opt .ss-txt{min-width:0}
 .ss-opt.special .ss-name{color:var(--muted);font-style:italic}
 .ss-opt.act{background:var(--band)}
 .ss-opt.sel .ss-name{font-weight:700}
@@ -461,6 +462,24 @@ textarea.input.details{min-height:96px}
 .sf-edit .ovl-f:focus-visible{outline:2px solid #3a5a99;outline-offset:1px}
 .sf-sel{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;margin-top:10px}
 
+/* ---- Schedule image (PNG export) ----
+   The image is drawn from the print layout (.p-doc) inside .img-sheet,
+   one A4 portrait page per week. Two meetings in one week are laid out
+   in columns (.img-cols) on that page. */
+.img-sheet{background:#fff;color:#262626;font-family:var(--font);font-size:16px;line-height:1.5}
+.img-sheet .p-meet:last-child{margin-bottom:0}
+.img-sheet .img-cols{display:grid;grid-template-columns:repeat(var(--cols),var(--colw));column-gap:var(--gap);row-gap:16pt;align-items:start}
+.img-sheet .img-cols .p-top{grid-column:1/-1;margin-bottom:0}
+.img-sheet .img-cols .p-meet{margin-bottom:0}
+.img-sheet .img-cols .p-meet+.p-meet{padding-top:0}
+.img-page{background:#fff;display:flex;justify-content:center;align-items:flex-start}
+.img-prev img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:4px;background:#fff}
+.img-prev figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.img-prev figcaption b{color:var(--text);font-weight:600}
+.img-list{display:flex;flex-direction:column;gap:18px}
+.img-prev{margin:0}
+.img-tip{font-size:14px;margin:0 0 12px}
+
 /* ---- Print (A4) ---- */
 #printArea{display:none}
 @page{size:A4;margin:14mm 14mm 16mm}
@@ -592,6 +611,7 @@ const ICON = {
   edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>',
   copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
   trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  image:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>',
   print:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M7 9V3h10v6M7 17H4v-7a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v7h-3"/><rect x="7" y="14" width="10" height="7"/></svg>',
   share:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4M5 12v8h14v-8"/></svg>',
   text:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 6h14M5 10h14M5 14h9M5 18h6"/></svg>',
@@ -1243,7 +1263,7 @@ function assignmentsOf(m){
   if (m.chairman) out.push({...base, pid:m.chairman, type:'chairman', label:'Chairman', section:'', sel:'[data-ed=chairman]'});
   if (m.openingPrayer && m.openingPrayer !== CHAIR) out.push({...base, pid:m.openingPrayer, type:'prayer', label:'Opening Prayer', section:'', sel:'[data-ed=openingPrayer]'});
   if (m.closingPrayer && m.closingPrayer !== CHAIR) out.push({...base, pid:m.closingPrayer, type:'prayer', label:'Closing Prayer', section:'', sel:'[data-ed=closingPrayer]'});
-  if (m.secondHall && m.hall2Counselor) out.push({...base, pid:m.hall2Counselor, type:'counselor', label:'Second Hall Counselor', section:'', sel:'[data-ed=hall2Counselor]'});
+  if (m.secondHall && m.hall2Counselor) out.push({...base, pid:m.hall2Counselor, type:'counselor', label:'Second Hall Counselor', section:'', hall2:true, sel:'[data-ed=hall2Counselor]'});
   activeParts(m.parts).forEach(p => {
     if (realId(p.assignee)) out.push({...base, pid:p.assignee, type:p.type, label:p.title, section:p.section, part:p, sel:`[data-ped=assignee][data-pid="${p.id}"]`});
     if (realId(p.assistant)) out.push({...base, pid:p.assistant, type:asstCat(p), label:`${p.title} (${asstLabel(p).toLowerCase()})`, section:p.section, part:p, asst:true, sel:`[data-ped=assistant][data-pid="${p.id}"]`});
@@ -1256,16 +1276,27 @@ function assignmentsOf(m){
 }
 const allAssignments = () => sortedMeetings().flatMap(assignmentsOf);
 
+/* Hall of one assignment: 'SH' for second-hall parts and the second hall
+   counselor, otherwise 'MH' (the main hall, where everything else happens). */
+const assignHall = a => a.hall2 ? 'SH' : 'MH';
+
 /* Map "publisherId|type" -> most recent date before `before`,
-   ignoring the meeting being edited. Used for "last done" hints. */
-function buildLastMap(before, excludeId){
+   ignoring the meeting being edited. Used for "last done" hints.
+   If `halls` is given it gets the same keys -> the hall of that SAME most
+   recent assignment ('MH' or 'SH'; 'MH/SH' if the person had parts in
+   both halls on that date). */
+function buildLastMap(before, excludeId, halls){
   const map = {};
+  const note = (k, a, h) => {
+    if (!map[k] || map[k] < a.date){ map[k] = a.date; if (halls) halls[k] = h; }
+    else if (halls && map[k] === a.date && halls[k] && halls[k] !== h) halls[k] = 'MH/SH';
+  };
   state.meetings.forEach(m => {
     if (m.id === excludeId || (before && m.date >= before)) return;
     assignmentsOf(m).forEach(a => {
-      const k = a.pid + '|' + a.type;
-      if (!map[k] || map[k] < a.date) map[k] = a.date;
-      if (!map[a.pid] || map[a.pid] < a.date) map[a.pid] = a.date;
+      const h = assignHall(a);
+      note(a.pid + '|' + a.type, a, h);
+      note(a.pid, a, h);
     });
   });
   return map;
@@ -1421,6 +1452,7 @@ function meetingActions(m){
   return `<div class="btnrow">
     <button class="btn primary" data-action="edit" data-id="${m.id}">${ICON.edit}Edit</button>
     <button class="btn" data-action="print" data-id="${m.id}">${ICON.print}Print</button>
+    <button class="btn" data-action="saveImage" data-id="${m.id}">${ICON.image}Save image</button>
     <button class="btn" data-action="copyText" data-id="${m.id}">${ICON.text}Copy text</button>
     <button class="btn" data-action="share" data-id="${m.id}">${ICON.share}Share</button>
     ${m.secondHall ? '' : `<button class="btn" data-action="addHall2" data-id="${m.id}">${ICON.plus}Second hall</button>`}
@@ -1570,7 +1602,8 @@ function schedMonth(){
       <div class="weeknav"><button class="btn icon" data-action="monthPrev" aria-label="Previous month">${ICON.left}</button>
         <button class="btn" data-action="monthToday">Today</button>
         <button class="btn icon" data-action="monthNext" aria-label="Next month">${ICON.right}</button></div>
-      <button class="btn" data-action="printMonth" ${monthMeetings.length ? '' : 'disabled'}>${ICON.print}Print month</button>
+      <div class="btnrow"><button class="btn" data-action="printMonth" ${monthMeetings.length ? '' : 'disabled'}>${ICON.print}Print month</button>
+        <button class="btn" data-action="imageMonth" ${monthMeetings.length ? '' : 'disabled'}>${ICON.image}${monthMeetings.length > 1 ? 'Save images' : 'Save image'}</button></div>
     </div>
     <h2 style="margin:4px 0 12px;font-size:26px">${MONTHS[m]} ${y}</h2>
     <div class="cal">${cells}</div>
@@ -1597,7 +1630,7 @@ function listResultsHTML(){
   const t = todayISO();
   const list = sortedMeetings().filter(m => (ui.listPast || m.date >= t) && listMatches(m, ui.listSearch));
   if (!list.length) return `<div class="empty"><h3>${state.meetings.length ? 'No meetings match' : 'No meetings yet'}</h3><p>${state.meetings.length ? 'Try another search, or include past meetings.' : 'Add your first meeting to start the schedule.'}</p><div class="btnrow"><button class="btn primary" data-action="addMeeting">${ICON.plus}Add meeting</button></div></div>`;
-  return `<div class="btnrow" style="justify-content:flex-end;margin-bottom:8px"><button class="btn sm" data-action="printList">${ICON.print}Print these ${list.length}</button></div>
+  return `<div class="btnrow" style="justify-content:flex-end;margin-bottom:8px"><button class="btn sm" data-action="printList">${ICON.print}Print these ${list.length}</button><button class="btn sm" data-action="imageList">${ICON.image}${list.length > 1 ? 'Save as images' : 'Save as image'}</button></div>
   <div class="rows">${list.map(m => {
     const d = parseISO(m.date), r = readiness(m);
     return `<div class="row">
@@ -2207,7 +2240,7 @@ function dialog({title, message, buttons}){
 const confirmDanger = (title, message, okLabel) => dialog({title, message, buttons:[{label:'Cancel', value:false}, {label:okLabel, value:true, cls:'danger solid'}]});
 
 /* ---------- Meeting editor ---------- */
-let ed = null; // {draft, orig, isNew, showAll, layer, lastMap}
+let ed = null; // {draft, orig, isNew, showAll, layer, lastMap, lastHall}
 
 function newMeetingDraft(date){
   const s = state.settings;
@@ -2235,7 +2268,8 @@ function openEditor(meeting, isNew){
 function renderEditorBody(){
   const b = $('#edBody'); if (!b) return;
   const st = b.scrollTop;
-  ed.lastMap = buildLastMap(ed.draft.date, ed.draft.id);
+  ed.lastHall = {};
+  ed.lastMap = buildLastMap(ed.draft.date, ed.draft.id, ed.lastHall);
   ssClose();
   b.innerHTML = editorHTML();
   enhanceSearchSelects(b);
@@ -2252,10 +2286,13 @@ function ssParts(text){
   const i = text.lastIndexOf(' — ');
   return i < 0 ? {name:text, info:''} : {name:text.slice(0, i), info:text.slice(i + 3)};
 }
+/* Publisher options carry their name and "last" info in data attributes
+   (the visible text is "Name - Okt 15 | MH"); other options use ssParts. */
+const ssOptParts = o => o.dataset.name !== undefined ? {name:o.dataset.name, info:o.dataset.info || ''} : ssParts(o.text);
 function ssLabel(sel){
   const o = sel.options[sel.selectedIndex];
   if (!o || !o.value) return '<span class="ss-ph">— Unassigned —</span>';
-  return esc(ssParts(o.text).name);
+  return esc(ssOptParts(o).name);
 }
 function enhanceSearchSelects(root){
   root.querySelectorAll('select[data-search]:not(.ss-native)').forEach(sel => {
@@ -2305,12 +2342,12 @@ function ssOpen(sel, btn, firstChar){
     shown = []; let html = '', pendingGroup = null;
     items.forEach(it => {
       if (it.group){ pendingGroup = it.group; return; }
-      const parts = ssParts(it.o.text), hay = ssNorm(parts.name);
+      const parts = ssOptParts(it.o), hay = ssNorm(parts.name);
       if (words.length && (parts.special || !words.every(w => hay.includes(w)))) return;
       if (pendingGroup){ html += `<div class="ss-group">${esc(pendingGroup)}</div>`; pendingGroup = null; }
       const i = shown.length; shown.push(it.o);
       html += `<div class="ss-opt${it.o.selected ? ' sel' : ''}${parts.special ? ' special' : ''}" role="option" data-i="${i}" aria-selected="${it.o.selected}">
-        <span class="ss-name">${esc(parts.name)}</span>${parts.info ? `<span class="ss-info">${esc(parts.info)}</span>` : ''}</div>`;
+        <span class="ss-txt"><span class="ss-name">${esc(parts.name)}</span>${parts.info ? ` <span class="ss-info">- ${esc(parts.info)}</span>` : ''}</span></div>`;
     });
     list.innerHTML = html || '<div class="ss-empty">No matching name</div>';
     active = Math.max(0, words.length ? 0 : shown.findIndex(o => o.selected));
@@ -2351,13 +2388,17 @@ document.addEventListener('touchstart', e => { if (ssCur && !ssCur.panel.contain
    who has waited longest for that type; ineligible ones only when
    "show everyone" is on (or already selected). Nothing is auto-assigned. */
 function pubOptions(selected, cat, brothersOnly, allowNone, allowChair){
-  const lm = ed ? ed.lastMap : {};
+  const lm = ed ? ed.lastMap : {}, lh = (ed && ed.lastHall) || {};
   // Living as Christians parts: sisters are never listed
   const list = state.publishers.filter(p => !brothersOnly || p.gender !== 'F' || p.id === selected).sort(byName);
+  // Shown as "Name - Okt 15 | MH": date and hall of the same (most recent) assignment.
+  // No earlier assignment -> "never"; no hall recorded -> the date only.
   const label = (p, warn) => {
-    const last = cat ? lm[p.id + '|' + cat] : lm[p.id];
-    const info = last ? ` — last ${fmtMD(last)}` : ' — never';
-    return `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}${warn ? ' (not marked eligible)' : ''}${info}</option>`;
+    const k = cat ? p.id + '|' + cat : p.id;
+    const last = lm[k], hall = last ? lh[k] : '';
+    const info = last ? `${fmtMD(last)}${hall ? ` | ${hall}` : ''}` : 'never';
+    const name = p.name + (warn ? ' (not marked eligible)' : '');
+    return `<option value="${p.id}" data-name="${esc(name)}" data-info="${esc(info)}" ${p.id === selected ? 'selected' : ''}>${esc(name)} - ${esc(info)}</option>`;
   };
   const elig = cat ? list.filter(p => p.categories.includes(cat)) : list;
   elig.sort((a, b) => (lm[a.id + '|' + cat] || '').localeCompare(lm[b.id + '|' + cat] || '') || a.name.localeCompare(b.name));
@@ -2714,6 +2755,154 @@ window.addEventListener('beforeprint', () => {
   document.body.classList.add('printing');
 });
 
+/* ---- Save the schedule as an image (PNG) ----
+   The image uses the same clean layout as the printout (printHTML): the
+   program, names and section colors, without buttons, menus or editing
+   controls. PNG keeps small text and thin lines sharp (JPEG would blur them).
+   Every week is its own image: ONE A4 portrait page (210 x 297 mm). In the
+   rare case of two meetings in the same week they share that page, side by
+   side in columns, scaled to fit.
+   No library and no network: the sheet is laid out in a hidden frame,
+   wrapped in an SVG <foreignObject> and painted onto a canvas. */
+const IMG = {colw:720, gap:36, pad:30, maxCols:5,
+  // A4 at 300 dpi; 400 dpi when the page is dense (still under iOS Safari's 16.7 MP canvas limit)
+  a4:{w:2480, h:3508}, a4hi:{w:3307, h:4677}};
+const A4_RATIO = 297 / 210;
+let imgBusy = false;
+const imgCSS = () => [...document.querySelectorAll('head style')].map(x => x.textContent).join('\n');
+function imgFrame(){
+  const f = document.createElement('iframe');
+  f.setAttribute('aria-hidden', 'true'); f.tabIndex = -1;
+  f.style.cssText = `position:fixed;left:-20000px;top:0;width:${IMG.colw + 2 * IMG.pad}px;height:100px;border:0;visibility:hidden;pointer-events:none`;
+  document.body.appendChild(f);
+  const d = f.contentDocument;
+  d.open();
+  d.write(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><style>${imgCSS()}</style></head><body style="margin:0;background:#fff"></body></html>`);
+  d.close();
+  return f;
+}
+/* The schedule laid out in `cols` columns; returns the element and its size in CSS px. */
+function imgSheet(d, list, cols){
+  const el = d.createElement('div');
+  el.className = 'img-sheet';
+  const w = 2 * IMG.pad + cols * IMG.colw + (cols - 1) * IMG.gap;
+  el.style.cssText = `width:${w}px;padding:${IMG.pad}px;box-sizing:border-box;flex:none`;
+  el.innerHTML = printHTML(list);
+  const doc = el.firstElementChild;
+  doc.classList.add('img-cols');
+  doc.style.cssText = `--cols:${cols};--colw:${IMG.colw}px;--gap:${IMG.gap}px`;
+  d.body.appendChild(el);
+  return {el, w, h:Math.ceil(el.getBoundingClientRect().height)};
+}
+/* Try 1..maxCols columns and keep the one whose sheet scales up most on A4. */
+function imgBestSheet(d, list){
+  let best = null;
+  for (let c = 1; c <= Math.min(IMG.maxCols, list.length); c++){
+    const sh = imgSheet(d, list, c);
+    const fit = Math.min(1 / sh.w, A4_RATIO / sh.h);   // page width = 1
+    if (!best || fit > best.fit){ if (best) best.el.remove(); best = {...sh, cols:c, fit}; }
+    else sh.el.remove();
+  }
+  return best;
+}
+function imgLoad(src){
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => (img.decode ? img.decode().catch(() => {}) : Promise.resolve()).then(() => setTimeout(() => res(img), 30));
+    img.onerror = () => rej(new Error('The schedule could not be drawn.'));
+    img.src = src;
+  });
+}
+async function imgRender(d, list){
+  const sh = imgBestSheet(d, list);
+  // A4 page in CSS px: as wide as the sheet, or wider if the sheet is tall
+  const pw = Math.max(sh.w, sh.h / A4_RATIO), ph = pw * A4_RATIO;
+  const size = IMG.a4.w / pw < 2 ? IMG.a4hi : IMG.a4;   // dense page -> more pixels
+  const page = d.createElement('div'), style = d.createElement('style');
+  page.className = 'img-page';
+  page.style.cssText = `width:${pw}px;height:${ph}px`;
+  style.textContent = imgCSS();
+  page.append(style, sh.el.cloneNode(true));
+  sh.el.remove();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size.w}" height="${size.h}" viewBox="0 0 ${pw} ${ph}" preserveAspectRatio="xMidYMin meet">`
+    + `<foreignObject x="0" y="0" width="${pw}" height="${ph}">${new XMLSerializer().serializeToString(page)}</foreignObject></svg>`;
+  const img = await imgLoad('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
+  const c = document.createElement('canvas');
+  c.width = size.w; c.height = size.h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, size.w, size.h);
+  ctx.drawImage(img, 0, 0, size.w, size.h);
+  const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+  if (!blob) throw new Error('The image is too large for this browser.');
+  return {blob, w:size.w, h:size.h, cols:sh.cols};
+}
+/* One image per week: meetings are grouped by week (normally one meeting
+   each) and every week becomes its own A4 image. */
+async function exportImage(list){
+  if (!list.length) return toast('There is no meeting to save.', 'error');
+  if (imgBusy) return;
+  imgBusy = true;
+  const weeks = [];
+  list.forEach(m => {
+    const k = toISO(weekStartOf(parseISO(m.date)));
+    const w = weeks.find(x => x.k === k);
+    w ? w.list.push(m) : weeks.push({k, list:[m]});
+  });
+  let f;
+  try {
+    f = imgFrame();
+    const items = [];
+    for (let i = 0; i < weeks.length; i++){
+      toast(weeks.length > 1 ? `Creating image ${i + 1} of ${weeks.length}…` : 'Creating image…');
+      const w = weeks[i], r = await imgRender(f.contentDocument, w.list);
+      const name = `schedule-${w.list.length === 1 ? w.list[0].date : 'week-' + w.k}.png`;
+      items.push({file:new File([r.blob], name, {type:'image/png'}), w:r.w, h:r.h, label:w.list.length === 1 ? weekLabel(w.list[0]) : fmtRange(parseISO(w.k))});
+    }
+    showImages(items);
+  } catch (e) {
+    console.error(e);
+    toast('This browser couldn’t create the image. Use Print instead (it can save a PDF).', 'error');
+  } finally {
+    if (f) f.remove();
+    imgBusy = false;
+  }
+}
+/* Preview of the week image(s) with Save (download) and, where the device
+   supports it, Share. Several weeks: each has its own Save button, plus
+   "Save all" and "Share all". */
+function showImages(items){
+  clearTimeout(toastTimer); $('#toast').className = '';   // hide "Creating image…"
+  const files = items.map(it => it.file), urls = files.map(x => URL.createObjectURL(x)), many = files.length > 1;
+  let canShare = false;
+  try { canShare = !!(navigator.share && navigator.canShare && navigator.canShare({files})); } catch (e) {}
+  let layer;
+  const done = () => { closeLayer(layer); setTimeout(() => urls.forEach(u => URL.revokeObjectURL(u)), 4000); };
+  layer = openLayer(`<div class="modal dialog" role="dialog" aria-modal="true" aria-label="${many ? 'Schedule images' : 'Schedule image'}">
+    <div class="modal-body"><h3>${many ? `Schedule images (${files.length} weeks)` : 'Schedule image'}</h3>
+      <p class="muted img-tip">${many ? 'One A4 image per week.' : 'One A4 page.'} On a phone you can also press and hold an image to save it.</p>
+      <div class="img-list">${items.map((it, i) => `<figure class="img-prev"><img src="${urls[i]}" alt="Schedule for ${esc(it.label)}">
+        <figcaption><span><b>${esc(it.label)}</b> · ${esc(it.file.name)} · ${it.w} × ${it.h} px</span>
+        ${many ? `<button class="btn sm" data-img="save1" data-i="${i}">${ICON.download}Save</button>` : ''}</figcaption></figure>`).join('')}</div></div>
+    <div class="modal-foot"><button class="btn" data-img="close">Close</button>
+      ${canShare ? `<button class="btn" data-img="share">${ICON.share}${many ? 'Share all' : 'Share'}</button>` : ''}
+      <button class="btn primary" data-img="save">${ICON.download}${many ? `Save all ${files.length}` : 'Save image'}</button></div></div>`, done);
+  layer.addEventListener('click', async e => {
+    const b = e.target.closest('[data-img]'); if (!b) return;
+    const act = b.dataset.img;
+    if (act === 'close') return done();
+    if (act === 'save1'){ const x = files[+b.dataset.i]; download(x.name, x, 'image/png'); toast('Image saved'); }
+    else if (act === 'save'){
+      // short pause between files so the browser accepts every download
+      files.forEach((x, i) => setTimeout(() => download(x.name, x, 'image/png'), i * 500));
+      toast(many ? `${files.length} images saved` : 'Image saved');
+    } else if (act === 'share'){
+      try { await navigator.share({files, title:`${state.settings.congName} — Meeting schedule`}); }
+      catch (err) { if (err && err.name !== 'AbortError') toast('Sharing failed. Use Save instead.', 'error'); }
+    }
+  });
+  const save = layer.querySelector('[data-img=save]'); if (save) save.focus();
+}
+
 function meetingText(m){
   const L = [];
   L.push(`${state.settings.congName} — Christian Life and Ministry Meeting`);
@@ -2862,6 +3051,9 @@ const actions = {
   print: el => { const m = findMeeting(el.dataset.id); if (m) printMeetings([m]); },
   printMonth: () => { const {y, m} = ui.monthCursor; printMeetings(sortedMeetings().filter(x => { const d = parseISO(x.date); return d.getFullYear() === y && d.getMonth() === m; })); },
   printList: () => { const t = todayISO(); printMeetings(sortedMeetings().filter(m => (ui.listPast || m.date >= t) && listMatches(m, ui.listSearch))); },
+  saveImage: el => { const m = findMeeting(el.dataset.id); if (m) exportImage([m]); },
+  imageMonth: () => { const {y, m} = ui.monthCursor; exportImage(sortedMeetings().filter(x => { const d = parseISO(x.date); return d.getFullYear() === y && d.getMonth() === m; })); },
+  imageList: () => { const t = todayISO(); exportImage(sortedMeetings().filter(m => (ui.listPast || m.date >= t) && listMatches(m, ui.listSearch))); },
   copyText: async el => { const m = findMeeting(el.dataset.id); if (!m) return; const txt = meetingText(m); if (await copyText(txt)) toast('Schedule copied as text'); else showTextForManualCopy(txt); },
   share: async el => {
     const m = findMeeting(el.dataset.id); if (!m) return; const txt = meetingText(m);
