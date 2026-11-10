@@ -169,7 +169,7 @@ select.input{appearance:none;-webkit-appearance:none;padding-right:32px;
 .grid3.roles{grid-template-columns:1fr}
 @media (min-width:600px){.grid2{grid-template-columns:1fr 1fr}.grid3,.grid3.roles{grid-template-columns:repeat(3,1fr)}}
 .check{display:flex;align-items:center;gap:10px;min-height:40px;cursor:pointer}
-.check input{width:20px;height:20px;accent-color:var(--treasures-bg)}
+.check input{width:20px;height:20px;flex:0 0 auto;accent-color:var(--treasures-bg)}
 .seg{display:flex;border:1px solid var(--input);border-radius:var(--radius);overflow:hidden;width:100%}
 .seg button{flex:1;border:0;background:var(--surface);padding:9px 6px;font-size:14px;font-weight:600;cursor:pointer;min-height:40px}
 .seg button+button{border-left:1px solid var(--input)}
@@ -234,6 +234,13 @@ button.chip{cursor:pointer;min-height:26px}
 .flash{animation:flash 2.2s ease-out}
 @media (prefers-reduced-motion:reduce){.flash{animation:none;box-shadow:0 0 0 3px var(--ministry-bg)}}
 .notice p{margin:0}
+.cat-row{flex-wrap:wrap}
+.cat-row .cat-bro{min-height:34px;font-size:14px;white-space:nowrap;gap:8px}
+.cat-row .cat-bro input{width:18px;height:18px}
+/* Publisher form: brother-only eligibility */
+.pcat-bro small{font-size:12px;color:var(--muted);margin-left:2px}
+.check.off{opacity:.45;cursor:not-allowed}
+.check.off input{cursor:not-allowed}
 .kv{display:grid;grid-template-columns:1fr;gap:0;border-top:1px solid var(--line);margin:14px 0}
 .kv>div{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
 .kv dt{color:var(--muted);font-size:14px;margin:0}
@@ -628,6 +635,13 @@ const DEFAULT_CATEGORIES = [
   {id:'counselor', name:'Second Hall Counselor'}
 ];
 
+/* Assignment categories only brothers may have (category.bro = true).
+   These are the defaults; each category's "Brothers only" switch can be
+   changed in Settings › Assignment categories (also for your own ones). */
+const BROTHER_CATS = ['chairman','prayer','treasures','gems','reading','studenttalk','living','localneeds','cbs','cbsreader','counselor'];
+DEFAULT_CATEGORIES.forEach(c => { c.bro = BROTHER_CATS.includes(c.id); });
+const isBroCat = id => !!(state && (state.settings.categories.find(c => c.id === id) || {}).bro);
+
 /* Inline SVG icons. Section icons mirror the workbook (gem, wheat, sheep). */
 const ICON = {
   gem:'<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"><path d="M6.5 4h11L21 9l-9 11L3 9z"/><path d="M3 9h18M9.5 4 8 9l4 11 4-11-1.5-5M8 9l4-5 4 5"/></svg>',
@@ -932,7 +946,9 @@ function validateData(o){
     slipCopies: si.slipCopies !== false,   // also print an assistant's copy of each slip
     slipFill: normSlipFill(si.slipFill),    // plain paper vs. the user's own printed slips
     bisaya: 3,
-    categories: Array.isArray(si.categories) ? si.categories.filter(c => c && typeof c.id === 'string' && c.id.trim()).map(c => ({id:str(c.id,40), name:str(c.name,60) || c.id})) : clone(DEFAULT_CATEGORIES),
+    // bro: saved choice, or (data from before this setting existed) the built-in default
+    categories: Array.isArray(si.categories) ? si.categories.filter(c => c && typeof c.id === 'string' && c.id.trim()).map(c => ({id:str(c.id,40), name:str(c.name,60) || c.id,
+      bro:typeof c.bro === 'boolean' ? c.bro : BROTHER_CATS.includes(str(c.id,40))})) : clone(DEFAULT_CATEGORIES),
     template: Array.isArray(si.template) ? si.template.map(normPart).filter(Boolean) : d.template
   };
   // core categories must always exist
@@ -1447,7 +1463,8 @@ function meetingWarnings(m){
   list.forEach(a => {
     const p = pub(a.pid);
     if (!p){ w.push({level:'conflict', text:`“${a.label}” is assigned to someone no longer in the directory.`, targets:[{label:'Edit', sel:a.sel}]}); return; }
-    if (a.type && !p.categories.includes(a.type)) w.push({level:'info', text:`${p.name} is not marked eligible for “${catName(a.type)}” (${a.label}).`, targets:[{label:'Edit', sel:a.sel}]});
+    if (a.type && p.gender === 'F' && isBroCat(a.type)) w.push({level:'warn', text:`${p.name} is a sister, but “${catName(a.type)}” is for brothers only (${a.label}).`, targets:[{label:'Edit', sel:a.sel}]});
+    else if (a.type && !p.categories.includes(a.type)) w.push({level:'info', text:`${p.name} is not marked eligible for “${catName(a.type)}” (${a.label}).`, targets:[{label:'Edit', sel:a.sel}]});
   });
   if (state.meetings.some(x => x.id !== m.id && x.date === m.date)) w.push({level:'conflict', text:`Another meeting is scheduled on ${fmtShort(m.date)}.`, targets:[{label:'Edit date', sel:'[data-ed=date]'}]});
   const total = activeParts(m.parts).reduce((t, p) => t + (p.duration || 0), 0);
@@ -2344,7 +2361,9 @@ function pubResultsHTML(){
   // last = most recent assignment, counting weeks already scheduled ahead
   const info = p => { const s = assignSummary(all.filter(a => a.pid === p.id), t); return {upcoming:s.ahead.length, last:s.latest}; };
   const gender = p => p.gender ? (p.gender === 'M' ? 'Brother' : 'Sister') : '';
-  const chips = p => p.categories.length ? p.categories.map(c => `<span class="chip cat">${esc(catName(c))}</span>`).join('') : '<span class="chip warn">No eligibility set</span>';
+  // A sister with a brother-only category (saved before this check existed) is flagged
+  const chips = p => p.categories.length ? p.categories.map(c => p.gender === 'F' && isBroCat(c)
+    ? `<span class="chip warn" title="For brothers only — open the record to remove it">${esc(catName(c))} (brothers only)</span>` : `<span class="chip cat">${esc(catName(c))}</span>`).join('') : '<span class="chip warn">No eligibility set</span>';
   const acts = p => `<div class="acts"><button class="btn icon sm ghost" data-action="editPub" data-id="${p.id}" aria-label="Edit ${esc(p.name)}">${ICON.edit}</button>
       <button class="btn icon sm ghost" data-action="delPub" data-id="${p.id}" aria-label="Delete ${esc(p.name)}">${ICON.trash}</button></div>`;
   const view = state.settings.pubView;
@@ -2490,8 +2509,9 @@ function viewSettings(){
     <button class="btn" data-action="tplReset">Restore original parts</button></div>
 
   <h2 class="subhead">Assignment categories</h2>
-  <p class="muted" style="margin-top:0">These are the assignment types used for eligibility and history. Rename or add your own. Chairman, Prayer, Student Assistant and the Bible study roles are used by the app and can be renamed but not removed.</p>
-  <div class="rows">${s.categories.map((c, i) => `<div class="row"><input class="input" data-cat="${i}" value="${esc(c.name)}" aria-label="Category name" maxlength="60" style="flex:1">
+  <p class="muted" style="margin-top:0">These are the assignment types used for eligibility and history. Rename or add your own. Chairman, Prayer, Student Assistant and the Bible study roles are used by the app and can be renamed but not removed. Categories marked “Brothers only” can’t be ticked for a sister.</p>
+  <div class="rows">${s.categories.map((c, i) => `<div class="row cat-row"><input class="input" data-cat="${i}" value="${esc(c.name)}" aria-label="Category name" maxlength="60" style="flex:1">
+    <label class="check cat-bro"><input type="checkbox" data-catbro="${i}" ${c.bro ? 'checked' : ''}> Brothers only</label>
     ${CORE_CATS.includes(c.id) ? '<span class="chip" title="Used by the app">Built in</span>' : `<button class="btn icon sm ghost" data-action="catDel" data-i="${i}" aria-label="Remove ${esc(c.name)}">${ICON.trash}</button>`}</div>`).join('')}</div>
   <div class="btnrow" style="margin-top:10px"><input class="input" id="newCat" placeholder="New category name" maxlength="60" style="flex:1;min-width:180px"><button class="btn" data-action="catAdd">${ICON.plus}Add category</button></div>
 
@@ -2729,6 +2749,8 @@ document.addEventListener('touchstart', e => { if (ssCur && !ssCur.panel.contain
 function pubOptions(selected, cat, brothersOnly, allowNone, allowChair){
   const lm = ed ? ed.lastMap : {}, lh = (ed && ed.lastHall) || {};
   // Living as Christians parts: sisters are never listed
+  // Brother-only categories (Settings) list no sisters either, except one already chosen
+  if (cat && isBroCat(cat)) brothersOnly = true;
   const list = state.publishers.filter(p => !brothersOnly || p.gender !== 'F' || p.id === selected).sort(byName);
   // Shown as "Name - Okt 15 | MH": date and hall of the same (most recent)
   // assignment, counting weeks already scheduled ahead; those end in
@@ -2972,7 +2994,9 @@ function openPubEditor(p){
   p = p ? clone(p) : {id:uid(), name:'', gender:'', categories:[], notes:''};
   const t = todayISO();
   const hist = allAssignments().filter(a => a.pid === p.id);
-  const cats = state.settings.categories.map(c => `<label class="check"><input type="checkbox" name="pcat" value="${c.id}" ${p.categories.includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('');
+  const cats = state.settings.categories.map(c => `<label class="check${c.bro ? ' pcat-bro' : ''}"><input type="checkbox" name="pcat" value="${c.id}"${c.bro ? ' data-bro="1"' : ''} ${p.categories.includes(c.id) ? 'checked' : ''}> <span>${esc(c.name)}${c.bro ? ' <small>(brothers only)</small>' : ''}</span></label>`).join('');
+  // Brother-only categories a sister already had ticked (from before this check existed)
+  const hadBro = p.gender === 'F' ? p.categories.filter(isBroCat) : [];
   let layer;
   const html = `<div class="modal" role="dialog" aria-modal="true" aria-label="${isNew ? 'Add publisher' : 'Edit publisher'}">
     <div class="modal-head"><button class="btn ghost" data-pe="cancel">Cancel</button><h2>${isNew ? 'Add publisher' : 'Edit publisher'}</h2><button class="btn primary" data-pe="save">Save</button></div>
@@ -2985,13 +3009,28 @@ function openPubEditor(p){
       <h3 style="margin-top:18px">Eligible for</h3>
       <p class="muted" style="margin:0 0 6px;font-size:14px">Only tick what this publisher may be assigned. Nothing is assumed.</p>
       <div class="btnrow" style="margin-bottom:4px"><button class="btn sm" data-pe="all">Select all</button><button class="btn sm" data-pe="none">Clear</button></div>
-      <div class="grid2" style="gap:0 12px">${cats}</div>
+      <div class="notice info hidden" id="pe-bronote" style="margin:4px 0 8px"><p>Options for brothers only are turned off for a sister.${hadBro.length ? ` <b>Removed when you save:</b> ${esc(hadBro.map(catName).join(', '))}.` : ''}</p></div>
+      <div class="grid2" style="gap:0 12px" id="pe-cats">${cats}</div>
       <label class="field" style="margin-top:14px"><span>Notes (optional)</span><textarea class="input" id="pe-notes" maxlength="500">${esc(p.notes)}</textarea></label>
       ${isNew ? '' : `<h3 style="margin-top:20px">Assignments on record</h3>${hist.length ? `<div class="rows">${hist.slice().reverse().map(a => `<div class="row"><div class="main"><div class="title" style="font-weight:600">${esc(a.label)}</div><div class="sub">${esc(fmtShort(a.date))}${a.date >= t ? ' · upcoming' : ''}</div></div></div>`).join('')}</div>` : '<p class="muted">None yet.</p>'}`}
     </div></div>`;
   const orig = JSON.stringify(p);
-  const collect = () => ({...p, name:$('#pe-name', layer).value.trim(), gender:$('#pe-gender', layer).value,
-    categories:[...layer.querySelectorAll('input[name=pcat]:checked')].map(x => x.value), notes:$('#pe-notes', layer).value.trim()});
+  // A sister never keeps a brother-only category, whatever the checkboxes say.
+  const collect = () => { const gender = $('#pe-gender', layer).value;
+    return {...p, name:$('#pe-name', layer).value.trim(), gender,
+      categories:[...layer.querySelectorAll('input[name=pcat]:checked')].map(x => x.value).filter(id => gender !== 'F' || !isBroCat(id)), notes:$('#pe-notes', layer).value.trim()}; };
+  /* Sister: brother-only boxes are unticked and disabled. What was ticked is
+     remembered, so switching back to Brother (or Not specified) restores it. */
+  const applyGender = () => {
+    const sis = $('#pe-gender', layer).value === 'F';
+    layer.querySelectorAll('input[name=pcat][data-bro]').forEach(x => {
+      if (sis){ if (!x.disabled){ x.dataset.was = x.checked ? '1' : ''; x.checked = false; x.disabled = true; } }
+      else if (x.disabled){ x.disabled = false; x.checked = x.dataset.was === '1'; }
+      x.closest('.check').classList.toggle('off', sis);
+      x.closest('.check').title = sis ? 'For brothers only' : '';
+    });
+    $('#pe-bronote', layer).classList.toggle('hidden', !sis);
+  };
   const cancel = async () => {
     if (JSON.stringify(collect()) !== orig && !(await dialog({title:'Discard changes?', message:'<p>This publisher has unsaved changes.</p>', buttons:[{label:'Keep editing', value:false}, {label:'Discard', value:true, cls:'danger solid'}]}))) return;
     closeLayer(layer);
@@ -3001,7 +3040,10 @@ function openPubEditor(p){
     const b = e.target.closest('[data-pe]'); if (!b) return;
     const a = b.dataset.pe;
     if (a === 'cancel') return cancel();
-    if (a === 'all' || a === 'none') return layer.querySelectorAll('input[name=pcat]').forEach(x => { x.checked = a === 'all'; });
+    if (a === 'all' || a === 'none') return layer.querySelectorAll('input[name=pcat]').forEach(x => {
+      if (x.disabled) x.dataset.was = a === 'all' ? '1' : '';   // remembered for Brother; stays off for a sister
+      else x.checked = a === 'all';
+    });
     if (a === 'save'){
       const np = collect();
       if (!np.name){ toast('Enter the publisher’s name.', 'error'); $('#pe-name', layer).focus(); return; }
@@ -3015,6 +3057,10 @@ function openPubEditor(p){
       closeLayer(layer); render();
     }
   });
+  $('#pe-gender', layer).addEventListener('change', applyGender);
+  // For an existing sister, record the original ticks first so "Brother" brings them back
+  layer.querySelectorAll('input[name=pcat][data-bro]').forEach(x => { x.dataset.was = x.checked ? '1' : ''; });
+  applyGender();
   setTimeout(() => { if (isNew && matchMedia('(pointer:fine)').matches) $('#pe-name', layer).focus(); }, 30);
 }
 
@@ -3515,7 +3561,7 @@ const actions = {
     if (state.settings.categories.some(c => c.name.toLowerCase() === name.toLowerCase())) return toast('That category already exists.', 'error');
     let id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'cat';
     while (state.settings.categories.some(c => c.id === id)) id += '-' + Math.floor(Math.random() * 90 + 10);
-    state.settings.categories.push({id, name}); save('Category added'); render();
+    state.settings.categories.push({id, name, bro:false}); save('Category added'); render();
   },
   catDel: async el => {
     const i = +el.dataset.i, c = state.settings.categories[i]; if (!c || CORE_CATS.includes(c.id)) return;
@@ -3629,6 +3675,14 @@ function onField(e){
     else p[f] = t.value;
     if (f === 'section') state.settings.template = orderedParts(state.settings.template);
     save('Template saved'); if (f === 'section') $('#tplList').innerHTML = templateHTML(); return;
+  }
+  if (t.dataset.catbro !== undefined){
+    const c = state.settings.categories[+t.dataset.catbro]; if (!c) return;
+    c.bro = t.checked;
+    const n = c.bro ? state.publishers.filter(p => p.gender === 'F' && p.categories.includes(c.id)).length : 0;
+    save(c.bro ? `“${c.name}” is now for brothers only${n ? ` — ${n} sister${n === 1 ? ' still has' : 's still have'} it ticked; open her record to update it` : ''}` : `“${c.name}” is open to brothers and sisters`);
+    if (ui.tab === 'publishers') render();
+    return;
   }
   if (t.dataset.cat !== undefined){
     const c = state.settings.categories[+t.dataset.cat]; if (!c) return;
