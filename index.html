@@ -412,11 +412,30 @@ textarea.input.details{min-height:96px}
 .slip h1{font-size:15pt;font-weight:800;text-transform:uppercase;text-align:center;line-height:1.15;margin:0 0 10pt}
 .sl-f{display:flex;align-items:flex-end;gap:5pt;margin:0 0 9pt;font-size:12.5pt}
 .sl-f b{white-space:nowrap;font-weight:800}
-.sl-f span{flex:1;border-bottom:1pt dotted #555;min-height:1.3em;font-size:12pt;padding:0 0 1pt 4pt}
+.sl-f>span{flex:1;min-width:0;border-bottom:1pt dotted #555;min-height:1.3em;font-size:12pt;padding:0 0 1pt 4pt}
 .sl-part{align-items:flex-start}
 .sl-part b{padding-top:1pt}
-.sl-part span{text-align:left;line-height:1.3}
-.slips .sl-part span{font-size:10.5pt}
+.sl-part>span{text-align:left;line-height:1.3}
+.slips .sl-part>span{font-size:10.5pt}
+/* Student vs. assistant: the student's name is the bold one */
+.sl-name>span{font-weight:700}
+.sl-asst>span{font-weight:400}
+.sl-f.sl-wrap{align-items:baseline}
+.slips .slip.tight h1{margin-bottom:6pt}
+.slips .slip.tight .sl-f{margin-bottom:6pt}
+.slips .slip.tight .sl-given{margin-top:6pt}
+.slips .slip.tight .sl-given div{margin-bottom:1pt}
+.slips .slip.tight .sl-note{margin-top:8pt}
+.slips .slip.tighter .sl-note{font-size:8.25pt;line-height:1.25}
+.slips .slip.tighter .sl-code{padding-top:4pt}
+
+/* ---- Fit-to-width text (names, date, counsel point) ----
+   fitText() shrinks the font, then narrows the letters a little, so the
+   text stays on ONE line. Only a name too long even for that wraps, and
+   then its second line is indented under the first (hanging indent), so it
+   reads as the same name and not as another person. */
+.fit-in{display:inline-block;white-space:nowrap;transform-origin:0 50%;vertical-align:bottom}
+.fit-wrap .fit-in{display:block;white-space:normal;text-indent:-1.4em;padding-left:1.4em;line-height:1.05;overflow-wrap:normal;hyphens:none}
 .sl-given{margin-top:10pt;font-size:12.5pt}
 .sl-given b{display:block;font-weight:800;margin-bottom:4pt}
 .sl-given div{display:flex;align-items:center;gap:8pt;margin:0 0 3pt 14pt}
@@ -444,6 +463,10 @@ textarea.input.details{min-height:96px}
 .ovl-f{position:absolute;line-height:1.15;white-space:nowrap;font-weight:600}
 .ovl-f.ovl-part{white-space:normal}
 .ovl-f.ovl-tick{font-weight:800;font-size:1.35em;line-height:1}
+.ovl-f.ovl-name{font-weight:700}
+.ovl-f.ovl-assistant{font-weight:500}
+.ovl-f.al-c{text-align:center}.ovl-f.al-r{text-align:right}
+.fit-wrap.al-c .fit-in,.fit-wrap.al-r .fit-in{text-indent:0;padding-left:0}
 .ovl-slip.guide::after{content:'';position:absolute;inset:0;border:.25mm dashed #999;pointer-events:none}
 .ovl-page{position:relative;overflow:hidden;break-after:page;page-break-after:always}
 .ovl-page:last-child{break-after:auto;page-break-after:auto}
@@ -460,7 +483,14 @@ textarea.input.details{min-height:96px}
 .sf-edit .ovl-f.sel{outline:2px solid #3a5a99;background:rgba(58,90,153,.18)}
 .sf-edit .ovl-f.sf-ghost{color:#9a9a9a}
 .sf-edit .ovl-f:focus-visible{outline:2px solid #3a5a99;outline-offset:1px}
-.sf-sel{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;margin-top:10px}
+.sf-sel{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+.sf-sel .sf-item{grid-column:1/-1}
+@media (min-width:640px){.sf-sel{grid-template-columns:2fr 1fr 1fr 1fr 1.1fr}.sf-sel .sf-item{grid-column:auto}}
+.sf-sel .input:disabled{opacity:.45}
+/* Layout version picker (set-up screen and Assignments page) */
+.sf-ver{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.sf-ver select.input{flex:1 1 220px;width:auto;font-weight:600}
+.slipmode select.input{width:auto;flex:0 1 280px;min-height:34px;padding-top:4px;padding-bottom:4px;font-size:14px;font-weight:600}
 
 /* ---- Schedule image (PNG export) ----
    The image is drawn from the print layout (.p-doc) inside .img-sheet,
@@ -567,6 +597,7 @@ textarea.input.details{min-height:96px}
 const APP_ID = 'clm-schedule';
 const STORE_KEY = 'clm-schedule-data-v1';     // main data
 const PREV_KEY = 'clm-schedule-before-change'; // safety copy before import/reset
+const SLIPFILL_BACKUP_KEY = 'clm-schedule-slipfill-before-versions'; // untouched copy of the old slip settings
 
 /* Settings for Apply Yourself to the Field Ministry parts (stored in part.format). */
 /* Program wording is in Bisaya (Cebuano), as in the workbook. */
@@ -714,12 +745,13 @@ function defaultTemplate(){
   ].map(([section,title,type,format,duration]) => ({id:uid(),section,title,type,format,duration,assignee:'',assistant:'',notes:''}));
 }
 /* Pre-printed slips: where each piece of text goes on the user's own
-   hard-copy S-89 slips. There are two physical slips in use, each with its
-   own fixed size, its own fields and its own saved positions. Positions are
-   millimetres from the slip's top-left corner to the top-left of the text.
-   kind: 'text' one line, 'wrap' may wrap to a second line, 'tick' a ✓ mark. */
+   hard-copy S-89 slips. There are two physical slip TYPES (below), each with
+   its own fixed size and fields. Positions are millimetres from the slip's
+   top-left corner to the top-left of the text.
+   kind: 'text' one line (shrinks to fit), 'wrap' may wrap to a second line,
+   'tick' a ✓ mark. */
 const SLIP_LAYOUTS = {
-  current:{name:'Current slip', w:80, h:110, size:10, fields:[
+  current:{name:'New slip', w:80, h:110, size:10, fields:[
     ['name','Name','text',17,22.9], ['assistant','Assistant','text',23.5,29.9], ['date','Date','text',15,36.9],
     ['part','Part no.','wrap',21,43.9],
     ['hall1','Tick: Main hall','tick',7.5,57.9], ['hall2','Tick: Auxiliary classroom 1','tick',7.5,62.4], ['hall3','Tick: Auxiliary classroom 2','tick',7.5,66.9]]},
@@ -733,44 +765,100 @@ const SLIP_LAYOUTS = {
 };
 const SLIP_LAYOUT_IDS = Object.keys(SLIP_LAYOUTS);
 const SF_PAPERS = {a4:{w:210, h:297, name:'A4'}, letter:{w:215.9, h:279.4, name:'Letter'}};
-const SLIP_PHOTO_KEY = 'clm-schedule-slip-photo';   // + '-' + layout: photo of a blank slip, this device only
+const SLIP_PHOTO_KEY = 'clm-schedule-slip-photo';   // + '-' + version id: photo of a blank slip, this device only
 const photoKey = id => SLIP_PHOTO_KEY + '-' + id;
 const PXMM = 96 / 25.4;                             // CSS pixels per millimetre
 const fnum = (v, min, max, d) => { const n = parseFloat(v); return Number.isFinite(n) ? Math.round(Math.min(max, Math.max(min, n)) * 10) / 10 : d; };
-const slipSizeLabel = id => `${SLIP_LAYOUTS[id].w} × ${SLIP_LAYOUTS[id].h} mm`;
-function defaultSlipLayout(id){
-  const L = SLIP_LAYOUTS[id], f = {};
-  L.fields.forEach(([fid, , , x, y]) => { f[fid] = {x, y}; });
+const slipSizeLabel = base => `${SLIP_LAYOUTS[base].w} × ${SLIP_LAYOUTS[base].h} mm`;
+const FIELD_ALIGN = ['l', 'c', 'r'];
+const MAX_SLIP_VERSIONS = 20;
+
+/* LAYOUT VERSIONS. The user keeps any number of named versions; each one
+   is based on one slip type and has its OWN paper, text size, margins
+   (move-all shift), and per-item position, width and alignment:
+     {id, name, base:'current'|'older', paper, size, dx, dy, f:{field:{x, y, w, al}}}
+   w = width in mm (0 = up to the slip's right edge), al = 'l' | 'c' | 'r'.
+   The built-in versions keep the ids 'current' and 'older', so settings and
+   slip photos saved before versions existed still belong to them. */
+const DEFAULT_VERSION_NAMES = {current:'New layout', older:'Older layout – Version 1'};
+function defaultSlipLayout(base){
+  const L = SLIP_LAYOUTS[base], f = {};
+  L.fields.forEach(([fid, , , x, y]) => { f[fid] = {x, y, w:0, al:'l'}; });
   return {size:L.size, dx:0, dy:0, f};
 }
+function newSlipVersion(base, id, name, paper){
+  return {id, name:name || DEFAULT_VERSION_NAMES[base] || SLIP_LAYOUTS[base].name, base, paper:paper || 'slip', ...defaultSlipLayout(base)};
+}
 function defaultSlipFill(){
-  const layouts = {}; SLIP_LAYOUT_IDS.forEach(id => { layouts[id] = defaultSlipLayout(id); });
-  return {mode:'plain', setup:false, paper:'slip', layout:'current', layouts};
+  return {mode:'plain', setup:false, layout:'current', paper:'slip',
+    versions:[newSlipVersion('current', 'current'), newSlipVersion('older', 'older')]};
+}
+/* Clean one version's formatting (also used for the pre-version format,
+   where each slip type had one {size, dx, dy, f} entry). */
+function normSlipVersion(src, base, id, name, paper){
+  const L = SLIP_LAYOUTS[base], v = newSlipVersion(base, id, name, paper);
+  if (!src || typeof src !== 'object') return v;
+  v.size = fnum(src.size, 6, 18, L.size); v.dx = fnum(src.dx, -50, 250, 0); v.dy = fnum(src.dy, -50, 250, 0);
+  if (['slip','a4','letter'].includes(src.paper)) v.paper = src.paper;
+  L.fields.forEach(([fid]) => {
+    const f = (src.f && typeof src.f === 'object' && src.f[fid]) || {}, dflt = v.f[fid];
+    v.f[fid] = {x:fnum(f.x, 0, L.w, dflt.x), y:fnum(f.y, 0, L.h, dflt.y), w:fnum(f.w, 0, L.w, 0), al:FIELD_ALIGN.includes(f.al) ? f.al : 'l'};
+  });
+  return v;
 }
 function normSlipFill(o){
   const r = defaultSlipFill();
   if (!o || typeof o !== 'object') return r;
   r.mode = o.mode === 'overlay' ? 'overlay' : 'plain';
-  r.paper = ['slip','a4','letter'].includes(o.paper) ? o.paper : 'slip';
-  r.layout = SLIP_LAYOUT_IDS.includes(o.layout) ? o.layout : 'current';
-  // Settings from before there were two slip types used a free slip size: start fresh.
-  if (!o.layouts || typeof o.layouts !== 'object') return r;
-  r.setup = !!o.setup;
-  SLIP_LAYOUT_IDS.forEach(id => {
-    const L = SLIP_LAYOUTS[id], src = o.layouts[id], dst = r.layouts[id];
-    if (!src || typeof src !== 'object') return;
-    dst.size = fnum(src.size, 6, 18, L.size); dst.dx = fnum(src.dx, -50, 250, 0); dst.dy = fnum(src.dy, -50, 250, 0);
-    L.fields.forEach(([fid]) => { const f = (src.f && src.f[fid]) || {};
-      dst.f[fid] = {x:fnum(f.x, 0, L.w, dst.f[fid].x), y:fnum(f.y, 0, L.h, dst.f[fid].y)}; });
+  const paper = ['slip','a4','letter'].includes(o.paper) ? o.paper : 'slip';
+  if (Array.isArray(o.versions)){
+    // Current format: a list of named versions
+    const seen = new Set(), list = [];
+    o.versions.forEach(src => {
+      if (!src || typeof src !== 'object' || !SLIP_LAYOUT_IDS.includes(src.base) || list.length >= MAX_SLIP_VERSIONS) return;
+      let id = /^[\w-]{1,40}$/.test(src.id || '') ? src.id : 'v' + uid();
+      if (seen.has(id)) id = 'v' + uid();
+      seen.add(id);
+      list.push(normSlipVersion(src, src.base, id, str(src.name, 60) || DEFAULT_VERSION_NAMES[src.base], paper));
+    });
+    // Always keep at least one version of each slip type
+    SLIP_LAYOUT_IDS.forEach((b, i) => { if (!list.some(v => v.base === b)) list.splice(i, 0, newSlipVersion(b, seen.has(b) ? 'v' + uid() : b, '', paper)); });
+    r.versions = list;
+    r.setup = !!o.setup;
+  } else if (o.layouts && typeof o.layouts === 'object'){
+    // MIGRATION from one layout per slip type ({layout, paper, layouts:{current, older}}):
+    // each becomes a named version with the same id and the same settings.
+    r.versions = SLIP_LAYOUT_IDS.map(b => normSlipVersion(o.layouts[b], b, b, '', paper));
+    r.setup = !!o.setup;
+  } else {
+    // Settings from before there were two slip types used a free slip size: start fresh.
+    r.versions.forEach(v => { v.paper = paper; });
+  }
+  r.layout = r.versions.some(v => v.id === o.layout) ? o.layout : r.versions[0].id;
+  // Mirror of the chosen version in the older shape, so an older copy of this
+  // app (another device, cloud sync) can still read the settings.
+  const cur = slipVersion(r);
+  r.paper = cur.paper;
+  r.layouts = {};
+  SLIP_LAYOUT_IDS.forEach(b => {
+    const v = cur.base === b ? cur : r.versions.find(x => x.base === b);
+    r.layouts[b] = {size:v.size, dx:v.dx, dy:v.dy, f:Object.fromEntries(Object.entries(v.f).map(([k, p]) => [k, {x:p.x, y:p.y}]))};
   });
   return r;
 }
-/* Everything needed to draw/print one layout: its fixed size and fields,
-   plus the user's text size, shift and positions for it. */
+const slipVersion = (sf, id) => sf.versions.find(v => v.id === (id || sf.layout)) || sf.versions[0];
+/* Photo of a blank slip for a version; new versions fall back to the photo
+   saved for their slip type's first version. */
+function versionPhoto(v){
+  const own = lsGet(photoKey(v.id));
+  if (own === false) return '';   // this version hides the borrowed photo
+  return own || (v.id !== v.base && lsGet(photoKey(v.base))) || '';
+}
+/* Everything needed to draw/print one version: its slip type's fixed size
+   and fields, plus the version's paper, text size, shift and positions. */
 function slipGeom(sf, id){
-  id = id || sf.layout;
-  const L = SLIP_LAYOUTS[id], u = sf.layouts[id];
-  return {id, name:L.name, w:L.w, h:L.h, fields:L.fields, size:u.size, dx:u.dx, dy:u.dy, f:u.f, paper:sf.paper};
+  const v = slipVersion(sf, id), L = SLIP_LAYOUTS[v.base];
+  return {id:v.id, name:v.name, base:v.base, w:L.w, h:L.h, fields:L.fields, size:v.size, dx:v.dx, dy:v.dy, f:v.f, paper:v.paper};
 }
 function defaultSettings(){
   return {slipFill:defaultSlipFill(), congName:'My Congregation', logoText:'', logoImage:'', meetingDay:3, meetingTime:'19:00', duration:105,
@@ -906,7 +994,13 @@ function load(){
   let raw = null;
   if (storageOK){ try { raw = localStorage.getItem(STORE_KEY); } catch (e) { raw = null; } }
   if (raw){
-    try { state = validateData(JSON.parse(raw)); return; }
+    try {
+      const parsed = JSON.parse(raw), sfOld = parsed && parsed.settings && parsed.settings.slipFill;
+      // Slip settings from before layout versions: keep an untouched copy once (they are migrated in normSlipFill).
+      if (sfOld && typeof sfOld === 'object' && !Array.isArray(sfOld.versions) && !localStorage.getItem(SLIPFILL_BACKUP_KEY))
+        localStorage.setItem(SLIPFILL_BACKUP_KEY, JSON.stringify(sfOld));
+      state = validateData(parsed); return;
+    }
     catch (e){
       // Keep the damaged copy aside instead of silently destroying it.
       try { localStorage.setItem(STORE_KEY + '-damaged-' + Date.now(), raw); } catch (_) {}
@@ -1692,15 +1786,17 @@ function findSlip(key){
 }
 const fmtDate = iso => { const d = parseISO(iso); return d ? `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}` : ''; };
 
-/* One assignment slip, laid out like the printed S-89 form. */
+/* One assignment slip, laid out like the printed S-89 form.
+   Names, assistant and date shrink to fit their line (see fitText). */
+const fitBox = (txt, min) => `<span data-fit="${min}"><span class="fit-in">${esc(txt).replace(/-/g, '\u2011')}</span></span>`;
 function slipHTML(it, asstCopy){
   const box = on => `<span class="sl-box">${on ? '✓' : ''}</span>`;
   return `<div class="slip${asstCopy ? ' copy' : ''}">
     ${asstCopy ? `<div class="sl-copy">Assistant’s copy</div>` : ''}
     <h1>Our Christian Life and Ministry Meeting Assignment</h1>
-    <div class="sl-f"><b>Name:</b><span>${esc(pname(it.student))}</span></div>
-    <div class="sl-f"><b>Assistant:</b><span>${esc(pname(it.assistant))}</span></div>
-    <div class="sl-f"><b>Date:</b><span>${esc(weekLabel(it.m))}</span></div>
+    <div class="sl-f sl-name"><b>Name:</b>${fitBox(pname(it.student), .7)}</div>
+    <div class="sl-f sl-asst"><b>Assistant:</b>${fitBox(pname(it.assistant), .7)}</div>
+    <div class="sl-f sl-date"><b>Date:</b>${fitBox(weekLabel(it.m), .75)}</div>
     <div class="sl-f sl-part"><b>Part no.:</b><span>${it.num ? it.num + '. ' : ''}${esc(it.p.title).replace(/-/g, '\u2011')}</span></div>
     <div class="sl-given"><b>To be given in:</b>
       <div>${box(it.hall === 1)} Main hall</div>
@@ -1711,6 +1807,72 @@ function slipHTML(it, asstCopy){
     <div class="sl-code">S-89-E&nbsp;&nbsp;11/23</div>
   </div>`;
 }
+
+/* ---- Fit text on one line ----
+   Each [data-fit] box holds one .fit-in span. If the text is wider than the
+   box: 1) shrink the font, down to data-fit × the normal size; 2) narrow the
+   letters slightly (to 80 %); 3) only then wrap onto two lines with a
+   hanging indent. Boxes marked data-up grow upward when they wrap, so the
+   last line stays on the slip's printed line and never runs into the next
+   field. Needs real layout, so the boxes must be rendered (not display:none). */
+function fitOne(el){
+  const inn = el.firstElementChild; if (!inn) return;
+  const row = el.parentElement && el.parentElement.classList.contains('sl-f') ? el.parentElement : null;
+  el.classList.remove('fit-wrap'); el.style.fontSize = ''; el.style.marginTop = ''; inn.style.transform = '';
+  if (row) row.classList.remove('sl-wrap');
+  const cs = getComputedStyle(el);
+  const avail = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 1;   // 1px safety for print rounding
+  if (avail <= 0 || inn.offsetWidth <= avail) return;
+  const h0 = el.offsetHeight;                     // height of one line at the normal size
+  const base = parseFloat(cs.fontSize), min = base * (parseFloat(el.dataset.fit) || .72);
+  let size = base;
+  const setSize = s => { size = s; el.style.fontSize = s.toFixed(2) + 'px'; return inn.offsetWidth; };
+  // Smallest font, not below `floor`, at which the text fits once its letters are narrowed to k
+  const shrinkTo = (floor, k) => {
+    let w = inn.offsetWidth;
+    if (w * k <= avail) return w;
+    w = setSize(Math.max(floor, size * avail / (w * k)));
+    while (w * k > avail && size > floor) w = setSize(Math.max(floor, size - .25));
+    return w;
+  };
+  const squeeze = k => {   // narrow the letters, keeping the item's alignment
+    const al = el.classList.contains('al-c') ? .5 : el.classList.contains('al-r') ? 1 : 0;
+    inn.style.transform = `translateX(${((avail - inn.offsetWidth * k) * al).toFixed(2)}px) scaleX(${k.toFixed(3)})`;
+  };
+  // 1) slightly smaller (to 85 %); 2) letters up to 10 % narrower;
+  // 3) smaller still, down to min; 4) letters up to 20 % narrower; 5) wrap.
+  let w = shrinkTo(Math.max(min, base * .85), 1);
+  if (w <= avail) return;
+  if (avail / w >= .9) return squeeze(avail / w);
+  w = shrinkTo(min, .9);
+  if (avail / w >= .8) return squeeze(Math.min(1, avail / w));
+  el.classList.add('fit-wrap'); if (row) row.classList.add('sl-wrap');
+  setSize(Math.max(min, base * .85));
+  while (inn.offsetHeight > size * 1.05 * 2.5 && size > min) setSize(Math.max(min, size - .25));
+  if (el.dataset.up !== undefined) el.style.marginTop = -Math.max(0, el.offsetHeight - h0).toFixed(2) + 'px';
+}
+/* Plain-paper slips have a fixed height (4 per A4 page). If a long part
+   title or a wrapped name would push the note or form code off the slip,
+   tighten that slip's spacing a step at a time instead of cutting it off. */
+function fitSlipHeight(slip){
+  slip.classList.remove('tight', 'tighter');
+  if (getComputedStyle(slip).overflow !== 'hidden' || !slip.lastElementChild) return;
+  // Cut off = the last line (form code) runs past the slip's bottom edge
+  const over = () => slip.lastElementChild.getBoundingClientRect().bottom > slip.getBoundingClientRect().bottom - 1;
+  if (over()) slip.classList.add('tight');
+  if (over()) slip.classList.add('tighter');
+}
+const fitText = root => { root.querySelectorAll('[data-fit]').forEach(fitOne); root.querySelectorAll('.slip').forEach(fitSlipHeight); };
+/* #printArea is hidden on screen; lay it out off-screen at its printed
+   width just long enough to measure, so print matches the measurement. */
+function fitPrintArea(widthMM){
+  const pa = $('#printArea');
+  pa.style.cssText = `display:block;position:absolute;left:-30000px;top:0;visibility:hidden;${widthMM ? `width:${widthMM}mm;` : ''}`;
+  try { fitText(pa); }
+  catch (e) { console.error('Could not fit slip text:', e); }   // never block printing
+  finally { pa.removeAttribute('style'); }
+}
+
 function printSlips(items){
   items = items.filter(slipReady);
   if (!items.length) return toast('No assigned students to print slips for.', 'error');
@@ -1724,14 +1886,52 @@ function printSlips(items){
   // Each student's slip, followed by a copy for the assistant (if any and if switched on)
   const html = items.map(it => slipHTML(it) + (state.settings.slipCopies && realId(it.assistant) ? slipHTML(it, true) : '')).join('');
   $('#printArea').innerHTML = `<div class="slips">${html}</div>`;
+  fitPrintArea(210 - 28);   // A4 minus the 14 mm side margins of @page
   document.body.classList.add('printing');
   setTimeout(() => window.print(), 60);
 }
 /* ---- Printing on the user's own pre-printed slips ----
    Only the fill-in text is printed (no headings, lines or boxes). Values
-   for every field of both layouts; each layout prints only its own fields. */
+   for every field of both slip types; each layout prints only its own fields. */
 const OLD_SLIP_TYPES = {reading:'asgReading', starting:'asgInitial', following:'asgReturn', disciples:'asgStudy'};
-function counselPoint(p){ const m = /\(([^()]*)\)\s*$/.exec(p.theme || ''); return m ? m[1].trim() : ''; }
+
+/* COUNSEL POINT for a slip.
+   Where it is kept:
+   - field ministry parts: in brackets inside part.theme,
+     e.g. "PAGPAMALAYBALAY. … (lmd leksiyon 1 punto 3)"
+   - the Bible reading: in part.notes ("Notes / material"),
+     e.g. "Isa 1:1-17 (th leksiyon 10)" — the reading has no theme field.
+   Earlier versions only looked for brackets at the very END of part.theme,
+   so the Bible reading never had one, and a ministry part lost it when
+   anything followed the brackets (a full stop, a second line) or the point
+   had brackets of its own, e.g. "(lmd leksiyon 9 punto 5 (b))". */
+const COUNSEL_HINT = /\b(th|lmd|be|leksiyon|lesson|aralin|study|pagtuon|punto|point|pt)\b/i;
+const BARE_COUNSEL = /\b(?:th|lmd)\.?\s+(?:leksiyon|lesson|aralin|study|pagtuon)?\s*\d+(?:\s*,?\s*(?:punto|point|pt\.?)\s*\d+)?/i;
+const SCRIPTURE = /\d+\s*:\s*\d+/;
+function bracketGroups(s){   // top-level ( … ) groups, nested brackets kept inside
+  const out = []; let depth = 0, start = -1;
+  for (let i = 0; i < s.length; i++){
+    const c = s[i];
+    if (c === '(' || c === '（'){ if (depth++ === 0) start = i; }
+    else if ((c === ')' || c === '）') && depth > 0 && --depth === 0) out.push({text:s.slice(start + 1, i).replace(/\s+/g, ' ').trim(), end:i + 1});
+  }
+  return out.filter(g => g.text);
+}
+function counselFrom(s){
+  s = String(s || '');
+  if (!s.trim()) return '';
+  const groups = bracketGroups(s);
+  // 1) the last bracket that names a lesson/study point
+  const hinted = groups.filter(g => COUNSEL_HINT.test(g.text));
+  if (hinted.length) return hinted[hinted.length - 1].text;
+  // 2) brackets at the end (only punctuation/space after), unless it is a scripture
+  const last = groups[groups.length - 1];
+  if (last && /^[\s.,;:!?]*$/.test(s.slice(last.end)) && !SCRIPTURE.test(last.text)) return last.text;
+  // 3) a point typed without brackets, e.g. "Isa 1:1-17 th leksiyon 10"
+  const m = BARE_COUNSEL.exec(s);
+  return m ? m[0].trim() : '';
+}
+const counselPoint = p => counselFrom(p.theme) || counselFrom(p.notes);
 function fillValues(it){
   const kind = OLD_SLIP_TYPES[it.p.type] || 'asgOther';
   return {name:pname(it.student), assistant:realId(it.assistant) ? pname(it.assistant) : '', date:weekLabel(it.m),
@@ -1746,6 +1946,11 @@ function sampleFill(){
   return {name:'Juan Dela Cruz', assistant:'Pedro Santos', date:'OKTUBRE 19-25', part:'4. Dihang Magsugod ug Panag-estorya', counsel:'lmd lesson 1 point 3',
     asgReading:'', asgInitial:'✓', asgReturn:'', asgStudy:'', asgOther:'', other:'', hall1:'✓', hall2:'', hall3:''};
 }
+/* Width of a text item: the version's own width, or up to 3 mm from the slip's right edge. */
+function fieldWidth(g, id, kind){
+  const p = g.f[id], room = g.w - p.x;
+  return Math.max(kind === 'wrap' ? 10 : 5, p.w > 0 ? Math.min(p.w, room) : room - 3);
+}
 /* One slip's text, positioned in mm, for layout geometry g (see slipGeom).
    o.edit = draggable editor view, o.photo = on-screen background photo,
    o.guide = dashed slip outline. */
@@ -1754,10 +1959,14 @@ function overlayHTML(v, g, o = {}){
     const p = g.f[id], tick = kind === 'tick';
     let txt = v[id] || '', cls = 'ovl-f ' + (tick ? 'ovl-tick' : kind === 'wrap' ? 'ovl-part' : 'ovl-' + id);
     if (!txt){ if (!o.edit) return ''; txt = tick ? '✓' : label; cls += ' sf-ghost'; }
-    let html = esc(txt); if (kind === 'wrap') html = html.replace(/-/g, '\u2011');
-    const width = kind === 'wrap' ? `width:${Math.max(10, g.w - p.x - 3)}mm;` : '';
+    if (!tick && p.al && p.al !== 'l') cls += ' al-' + p.al;
+    let html = esc(txt); if (!tick) html = html.replace(/-/g, '\u2011');
+    const width = tick ? '' : `width:${fieldWidth(g, id, kind)}mm;`;
+    // One-line items shrink to fit their width (names a little further than the rest)
+    const fit = kind === 'text' ? ` data-fit="${id === 'name' || id === 'assistant' ? .7 : .75}" data-up` : '';
+    if (kind === 'text') html = `<span class="fit-in">${html}</span>`;
     const ed = o.edit ? ` tabindex="0" role="button" aria-label="${esc(label)}: drag onto its line"` : '';
-    return `<div class="${cls}${o.sel === id ? ' sel' : ''}" data-f="${id}"${ed} style="left:${p.x}mm;top:${p.y}mm;${width}">${html}</div>`;
+    return `<div class="${cls}${o.sel === id ? ' sel' : ''}" data-f="${id}"${fit}${ed} style="left:${p.x}mm;top:${p.y}mm;${width}">${html}</div>`;
   }).join('');
   return `<div class="ovl-slip${o.guide ? ' guide' : ''}${o.edit ? ' sf-edit' : ''}" style="width:${g.w}mm;height:${g.h}mm;font-size:${g.size}pt">${o.photo ? `<img class="ovl-photo" src="${o.photo}" alt="">` : ''}${fields}</div>`;
 }
@@ -1776,6 +1985,7 @@ function setPageCSS(css){
 function printOverlay(vals, g, guide){
   const P = paperOf(g);
   $('#printArea').innerHTML = vals.map(v => `<div class="ovl-page" style="width:${P.w}mm;height:${P.h}mm"><div class="ovl-pos" style="left:${g.dx}mm;top:${g.dy}mm">${overlayHTML(v, g, {guide})}</div></div>`).join('');
+  fitPrintArea();
   setPageCSS(`@page{size:${P.w}mm ${P.h}mm;margin:0}`);
   document.body.classList.add('printing');
   setTimeout(() => window.print(), 60);
@@ -1800,39 +2010,88 @@ function loadSlipPhoto(file, done){
 const paperTip = g => g.paper === 'slip'
   ? `Feed one blank slip at a time (usually through the manual or rear tray). In the print dialog choose a custom paper size of ${g.w} × ${g.h} mm if asked, scale 100%, margins none.`
   : `Tape a blank slip into the top-left corner of an ${SF_PAPERS[g.paper].name} sheet and print on the sheet. In the print dialog choose ${SF_PAPERS[g.paper].name}, scale 100%, margins none.`;
+/* <option>s for the layout versions, grouped by slip type */
+const versionOptionsHTML = sf => SLIP_LAYOUT_IDS.map(b => {
+  const list = sf.versions.filter(v => v.base === b);
+  return list.length ? `<optgroup label="${esc(SLIP_LAYOUTS[b].name)} (${slipSizeLabel(b)})">${list.map(v =>
+    `<option value="${esc(v.id)}"${v.id === sf.layout ? ' selected' : ''}>${esc(v.name)}</option>`).join('')}</optgroup>` : '';
+}).join('');
+/* Name for a new version: "Older layout – Version 2", "New layout – Version 2", … */
+function nextVersionName(sf, base){
+  const stem = base === 'older' ? 'Older layout' : 'New layout';
+  let n = sf.versions.filter(v => v.base === base).length + 1;
+  while (sf.versions.some(v => v.name === `${stem} – Version ${n}`)) n++;
+  return `${stem} – Version ${n}`;
+}
+/* Small form layer for naming a version. Resolves {name, from} or null. */
+function versionNameDialog({title, okLabel, value, from}){
+  return new Promise(res => {
+    let layer;
+    const done = v => { closeLayer(layer); res(v); };
+    layer = openLayer(`<div class="modal dialog" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="modal-body"><h3>${esc(title)}</h3>
+        <label class="field"><span>Name</span><input class="input" id="vnName" maxlength="60" value="${esc(value)}"></label>
+        ${from ? `<label class="field" style="margin-top:12px"><span>Start from</span><select class="input" id="vnFrom">${from}</select></label>
+          <p class="muted sf-tip">The new version copies these positions, margins and text size. Change them, then save.</p>` : ''}
+      </div>
+      <div class="modal-foot"><button class="btn" data-vn="0">Cancel</button><button class="btn primary" data-vn="1">${esc(okLabel)}</button></div></div>`, () => done(null));
+    const name = layer.querySelector('#vnName');
+    const ok = () => { const n = name.value.trim(); if (!n) { toast('Give the layout version a name.', 'error'); name.focus(); return; }
+      done({name:n, from:from ? layer.querySelector('#vnFrom').value : ''}); };
+    layer.addEventListener('click', e => { const b = e.target.closest('[data-vn]'); if (b) b.dataset.vn === '1' ? ok() : done(null); });
+    name.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); ok(); } });
+    setTimeout(() => { name.focus(); name.select(); }, 30);
+  });
+}
 
-/* Set-up screen: which slip, paper, and drag each item onto its line. */
+/* Set-up screen: which layout version, paper, and drag each item onto its line.
+   Works on a copy (d); nothing is kept until "Save layout". */
 function openSlipSetup(){
   const d = clone(state.settings.slipFill), sample = sampleFill();
-  const G = () => slipGeom(d), U = () => d.layouts[d.layout];
-  let sel = 'name', k = 1, photo = lsGet(photoKey(d.layout)) || '';
+  const G = () => slipGeom(d), U = () => slipVersion(d);
+  const added = new Set(), removed = new Set();   // version ids, to tidy up their photos
+  let sel = 'name', k = 1, photo = '';
   const num = (key, label) => `<label class="field"><span>${label}</span><input class="input" type="number" inputmode="decimal" step="0.5" data-sf="${key}" value="${U()[key]}"></label>`;
-  const layer = openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-label="Set up your printed slips">
+  let layer;
+  const cancel = () => { added.forEach(id => lsSet(photoKey(id), null)); closeLayer(layer); };
+  layer = openLayer(`<div class="modal" role="dialog" aria-modal="true" aria-label="Set up your printed slips">
     <div class="modal-head"><h2>Set up your printed slips</h2></div>
     <div class="modal-body">
-      <p class="sf-lead">Only the names and details are printed, so they land on the blank lines of your hard-copy S-89 slips. Choose the slip you have, then check each item sits on its line.</p>
-      <div class="field"><span>Which slip are you using?</span>
-        <div class="seg sf-layouts" role="group" aria-label="Slip type">${SLIP_LAYOUT_IDS.map(id =>
-          `<button type="button" data-sfl="${id}" class="${d.layout === id ? 'on' : ''}" aria-pressed="${d.layout === id}">${esc(SLIP_LAYOUTS[id].name)}<small>${slipSizeLabel(id)}</small></button>`).join('')}</div></div>
+      <p class="sf-lead">Only the names and details are printed, so they land on the blank lines of your hard-copy S-89 slips. Choose the layout version for the slip you have, then check each item sits on its line.</p>
+      <div class="field"><span>Layout version</span>
+        <div class="sf-ver"><select class="input" id="sfVer" aria-label="Layout version"></select>
+          <button type="button" class="btn sm" data-sfa="addver">${ICON.plus || ''}New version</button>
+          <button type="button" class="btn sm" data-sfa="rename">Rename</button>
+          <button type="button" class="btn sm danger" data-sfa="delver">Delete</button></div></div>
+      <p class="muted sf-tip" id="sfVerTip"></p>
       <div class="field" style="margin-top:14px"><span>What goes into the printer</span>
         <div class="seg" role="group" aria-label="Paper in the printer">${[['slip', 'The slip itself'], ['a4', 'Slip on A4 sheet'], ['letter', 'Slip on Letter sheet']].map(([v, l]) =>
-          `<button type="button" data-sfp="${v}" class="${d.paper === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+          `<button type="button" data-sfp="${v}">${l}</button>`).join('')}</div></div>
       <p class="muted sf-tip" id="sfPaperTip"></p>
       <div class="sf-row">${num('size', 'Text size (pt)')}${num('dx', 'Move all text right (mm)')}${num('dy', 'Move all text down (mm)')}</div>
       <div class="sf-stage" id="sfStage"></div>
       <div class="sf-sel">
-        <label class="field"><span>Item</span><select class="input" id="sfSel"></select></label>
+        <label class="field sf-item"><span>Item</span><select class="input" id="sfSel"></select></label>
         <label class="field"><span>From left (mm)</span><input class="input" type="number" inputmode="decimal" step="0.5" id="sfX"></label>
         <label class="field"><span>From top (mm)</span><input class="input" type="number" inputmode="decimal" step="0.5" id="sfY"></label>
+        <label class="field"><span>Width (mm)</span><input class="input" type="number" inputmode="decimal" step="0.5" min="0" id="sfW" placeholder="Auto"></label>
+        <label class="field"><span>Align</span><select class="input" id="sfAl"><option value="l">Left</option><option value="c">Center</option><option value="r">Right</option></select></label>
       </div>
-      <p class="muted sf-tip">Drag an item, or select it and use the arrow keys (hold Shift for 5 mm steps). Each slip type keeps its own positions.</p>
+      <p class="muted sf-tip">Drag an item, or select it and use the arrow keys (hold Shift for 5 mm steps). Width is how far the text may run before it is made smaller to fit; leave it empty to use the space up to the slip’s edge. Each layout version keeps its own settings.</p>
       <div class="btnrow" style="margin-top:12px" id="sfPhotoRow"></div>
       <input type="file" accept="image/*" id="sfPhotoFile" hidden>
     </div>
     <div class="modal-foot"><button class="btn" data-sfa="test">${ICON.print}Print test</button><span style="flex:1"></span>
-      <button class="btn" data-sfa="cancel">Cancel</button><button class="btn primary" data-sfa="save">Save layout</button></div></div>`);
+      <button class="btn" data-sfa="cancel">Cancel</button><button class="btn primary" data-sfa="save">Save layout</button></div></div>`, () => cancel());
   const stage = layer.querySelector('#sfStage'), selEl = layer.querySelector('#sfSel'), xEl = layer.querySelector('#sfX'), yEl = layer.querySelector('#sfY');
-  const syncSel = () => { selEl.value = sel; xEl.value = U().f[sel].x; yEl.value = U().f[sel].y; };
+  const wEl = layer.querySelector('#sfW'), alEl = layer.querySelector('#sfAl'), verEl = layer.querySelector('#sfVer');
+  const kindOf = id => (G().fields.find(f => f[0] === id) || [])[2];
+  const syncSel = () => {
+    const f = U().f[sel], tick = kindOf(sel) === 'tick';
+    selEl.value = sel; xEl.value = f.x; yEl.value = f.y;
+    wEl.value = tick ? '' : (f.w || ''); alEl.value = f.al || 'l';
+    wEl.disabled = alEl.disabled = tick;
+  };
   const drawPhotoRow = () => { layer.querySelector('#sfPhotoRow').innerHTML =
     `<button class="btn sm" data-sfa="photo">${photo ? 'Replace photo' : 'Add photo of a blank slip'}</button>` +
     (photo ? `<button class="btn sm danger" data-sfa="nophoto">Remove photo</button>` : '') +
@@ -1840,23 +2099,33 @@ function openSlipSetup(){
     (photo ? '' : `<span class="muted sf-tip" style="margin:0">A photo cropped to the slip’s edges shows its lines here (on screen only).</span>`); };
   const draw = () => {
     const r = scaledSlipHTML(overlayHTML(sample, G(), {edit:true, photo, sel, guide:!photo}), G(), stage.clientWidth - 24, Math.max(280, window.innerHeight * .55));
-    k = r.k; stage.innerHTML = r.html; syncSel();
+    k = r.k; stage.innerHTML = r.html; try { fitText(stage); } catch (e) { console.error(e); } syncSel();
   };
-  // Everything that depends on which slip is chosen
+  // Everything that depends on which version is chosen
   const showLayout = () => {
-    const g = G();
+    const g = G(), v = U();
     if (!g.f[sel]) sel = 'name';
+    verEl.innerHTML = versionOptionsHTML(d); verEl.value = v.id;
     selEl.innerHTML = g.fields.map(([id, l]) => `<option value="${id}">${esc(l)}</option>`).join('');
-    layer.querySelectorAll('[data-sf]').forEach(i => { i.value = U()[i.dataset.sf]; });
-    layer.querySelectorAll('[data-sfl]').forEach(b => { const on = b.dataset.sfl === d.layout; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    layer.querySelectorAll('[data-sf]').forEach(i => { i.value = v[i.dataset.sf]; });
+    layer.querySelectorAll('[data-sfp]').forEach(b => { const on = b.dataset.sfp === v.paper; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    const lone = d.versions.filter(x => x.base === v.base).length < 2;
+    const del = layer.querySelector('[data-sfa=delver]'); del.disabled = lone;
+    del.title = lone ? `The only ${SLIP_LAYOUTS[v.base].name.toLowerCase()} version can’t be deleted` : '';
+    layer.querySelector('#sfVerTip').textContent = `For the ${SLIP_LAYOUTS[v.base].name.toLowerCase()} (${slipSizeLabel(v.base)}). This version keeps its own paper, text size, margins and positions.`;
     layer.querySelector('#sfPaperTip').textContent = paperTip(g);
-    photo = lsGet(photoKey(d.layout)) || '';
+    photo = versionPhoto(v);
     draw(); drawPhotoRow();
   };
   const setPos = (id, x, y) => {
     const g = G(), f = g.f[id]; f.x = fnum(Math.round(x * 2) / 2, 0, g.w, f.x); f.y = fnum(Math.round(y * 2) / 2, 0, g.h, f.y);
     const el = stage.querySelector(`[data-f="${id}"]`);
-    if (el){ el.style.left = f.x + 'mm'; el.style.top = f.y + 'mm'; if (el.classList.contains('ovl-part')) el.style.width = Math.max(10, g.w - f.x - 3) + 'mm'; }
+    if (el){
+      el.style.left = f.x + 'mm'; el.style.top = f.y + 'mm';
+      const kind = kindOf(id);
+      if (kind !== 'tick') el.style.width = fieldWidth(g, id, kind) + 'mm';
+      if (el.dataset.fit !== undefined) fitOne(el);
+    }
     if (id === sel) syncSel();
   };
   const select = id => { sel = id; stage.querySelectorAll('.ovl-f').forEach(el => el.classList.toggle('sel', el.dataset.f === id)); syncSel(); };
@@ -1881,6 +2150,7 @@ function openSlipSetup(){
   stage.addEventListener('focusin', e => { const el = e.target.closest('.ovl-f'); if (el && el.dataset.f !== sel) select(el.dataset.f); });
 
   const LIM = {size:[6, 18], dx:[-50, 250], dy:[-50, 250]};
+  const setWidth = n => { const g = G(); U().f[sel].w = fnum(n, 0, g.w, 0); setPos(sel, U().f[sel].x, U().f[sel].y); };
   layer.addEventListener('input', e => {
     const t = e.target;
     if (t.dataset.sf){
@@ -1889,33 +2159,69 @@ function openSlipSetup(){
     } else if (t === xEl || t === yEl){
       const n = parseFloat(t.value); if (!Number.isFinite(n)) return;
       const f = U().f[sel]; setPos(sel, t === xEl ? n : f.x, t === yEl ? n : f.y);
+    } else if (t === wEl){
+      const n = t.value.trim() === '' ? 0 : parseFloat(t.value); if (!Number.isFinite(n) || n < 0) return;
+      setWidth(n);
     }
   });
   layer.addEventListener('change', e => {
     const t = e.target;
     if (t.dataset.sf){ const lim = LIM[t.dataset.sf]; U()[t.dataset.sf] = fnum(t.value, lim[0], lim[1], U()[t.dataset.sf]); t.value = U()[t.dataset.sf]; draw(); }
-    else if (t === xEl || t === yEl) syncSel();
+    else if (t === xEl || t === yEl || t === wEl) syncSel();
     else if (t === selEl) select(t.value);
+    else if (t === alEl){ U().f[sel].al = FIELD_ALIGN.includes(t.value) ? t.value : 'l'; draw(); }
+    else if (t === verEl){ if (d.versions.some(v => v.id === t.value)){ d.layout = t.value; showLayout(); } }
     else if (t.id === 'sfPhotoFile'){
       const key = photoKey(d.layout);
       loadSlipPhoto(t.files[0], url => { photo = url; lsSet(key, url); if ((lsGet(key) || '') !== url) toast('The photo is too large to keep, but it is shown for now.', 'error'); draw(); drawPhotoRow(); });
       t.value = '';
     }
   });
-  layer.addEventListener('click', e => {
-    const l = e.target.closest('[data-sfl]');
-    if (l){ if (l.dataset.sfl !== d.layout){ d.layout = l.dataset.sfl; showLayout(); } return; }
+  layer.addEventListener('click', async e => {
     const p = e.target.closest('[data-sfp]');
-    if (p){ d.paper = p.dataset.sfp; layer.querySelectorAll('[data-sfp]').forEach(b => b.classList.toggle('on', b === p));
+    if (p){ U().paper = p.dataset.sfp; layer.querySelectorAll('[data-sfp]').forEach(b => { b.classList.toggle('on', b === p); b.setAttribute('aria-pressed', b === p); });
       layer.querySelector('#sfPaperTip').textContent = paperTip(G()); return; }
-    const b = e.target.closest('[data-sfa]'); if (!b) return;
-    const a = b.dataset.sfa;
-    if (a === 'cancel') closeLayer(layer);
-    else if (a === 'save'){ d.setup = true; d.mode = 'overlay'; state.settings.slipFill = normSlipFill(d); save(`Saved: ${SLIP_LAYOUTS[d.layout].name.toLowerCase()} (${slipSizeLabel(d.layout)})`); closeLayer(layer); render(); }
+    const b = e.target.closest('[data-sfa]'); if (!b || b.disabled) return;
+    const a = b.dataset.sfa, v = U();
+    if (a === 'cancel') cancel();
+    else if (a === 'save'){
+      d.setup = true; d.mode = 'overlay';
+      state.settings.slipFill = normSlipFill(d);
+      removed.forEach(id => { if (!SLIP_LAYOUT_IDS.includes(id)) lsSet(photoKey(id), null); });
+      save(`Saved: ${slipVersion(state.settings.slipFill).name}`); closeLayer(layer); render();
+    }
     else if (a === 'test') printOverlay([sample], slipGeom(normSlipFill(d)), true);
-    else if (a === 'reset'){ U().f = defaultSlipLayout(d.layout).f; draw(); }
+    else if (a === 'reset'){ U().f = defaultSlipLayout(v.base).f; draw(); }
     else if (a === 'photo') layer.querySelector('#sfPhotoFile').click();
-    else if (a === 'nophoto'){ photo = ''; lsSet(photoKey(d.layout), null); draw(); drawPhotoRow(); }
+    else if (a === 'nophoto'){
+      // A copied version can hide the photo it borrows from its slip type
+      lsSet(photoKey(v.id), v.id === v.base ? null : false); photo = versionPhoto(v); draw(); drawPhotoRow();
+    }
+    else if (a === 'addver'){
+      if (d.versions.length >= MAX_SLIP_VERSIONS) return toast(`You can keep up to ${MAX_SLIP_VERSIONS} layout versions.`, 'error');
+      const from = d.versions.map(x => `<option value="v:${esc(x.id)}"${x.id === v.id ? ' selected' : ''}>Copy of ${esc(x.name)}</option>`).join('')
+        + SLIP_LAYOUT_IDS.map(b2 => `<option value="d:${b2}">${esc(SLIP_LAYOUTS[b2].name)} — default positions</option>`).join('');
+      const r = await versionNameDialog({title:'New layout version', okLabel:'Add version', value:nextVersionName(d, v.base === 'current' ? 'older' : v.base), from});
+      if (!r) return;
+      const src = r.from.startsWith('v:') ? d.versions.find(x => x.id === r.from.slice(2)) : null;
+      const base = src ? src.base : SLIP_LAYOUT_IDS.includes(r.from.slice(2)) ? r.from.slice(2) : 'older';
+      const nv = src ? {...clone(src)} : newSlipVersion(base, '', '', v.paper);
+      nv.id = 'v' + uid(); nv.name = r.name.slice(0, 60); nv.base = base;
+      d.versions.push(nv); d.layout = nv.id; added.add(nv.id);
+      showLayout(); toast(`Added “${nv.name}” — save to keep it`);
+    }
+    else if (a === 'rename'){
+      const r = await versionNameDialog({title:'Rename layout version', okLabel:'Rename', value:v.name});
+      if (!r) return;
+      v.name = r.name.slice(0, 60); showLayout();
+    }
+    else if (a === 'delver'){
+      if (d.versions.filter(x => x.base === v.base).length < 2) return;
+      if (!(await confirmDanger('Delete layout version?', `<p>“${esc(v.name)}” and its positions will be removed when you save.</p>`, 'Delete'))) return;
+      d.versions = d.versions.filter(x => x !== v); removed.add(v.id);
+      d.layout = (d.versions.find(x => x.base === v.base) || d.versions[0]).id;
+      showLayout();
+    }
   });
 }
 
@@ -1931,6 +2237,7 @@ function viewSlips(){
   const chosen = items.filter(it => slipReady(it) && !ui.slipOff.has(it.key));
   const copies = state.settings.slipCopies ? chosen.filter(it => realId(it.assistant)).length : 0;
   const total = chosen.length + copies;
+  const sf = state.settings.slipFill, g = slipGeom(sf);
   const nav = `<div class="toolbar">
       <div class="weeknav"><button class="btn icon" data-action="slipWeek" data-dir="-1" aria-label="Previous week">${ICON.left}</button>
       <button class="btn" data-action="slipWeek" data-dir="0">Next meeting</button>
@@ -1946,12 +2253,13 @@ function viewSlips(){
     return `<div class="band"><div class="wrap"><p class="kicker">${esc(fmtLong(m.date))}</p><h2>${esc(weekLabel(m))}</h2></div></div>
     <div class="wrap">${nav}
       <div class="btnrow" style="margin-bottom:6px"><button class="btn sm" data-action="slipSelAll" data-v="1">Select all</button><button class="btn sm" data-action="slipSelAll" data-v="0">Select none</button>
-        <span class="muted" style="font-size:14px">${state.settings.slipFill.mode === 'overlay'
-          ? `Tick the slips to print — names and details only, for the ${SLIP_LAYOUTS[state.settings.slipFill.layout].name.toLowerCase()} (${slipSizeLabel(state.settings.slipFill.layout)}), ${state.settings.slipFill.paper === 'slip' ? 'each on its own blank slip' : 'one per ' + SF_PAPERS[state.settings.slipFill.paper].name + ' sheet'}.`
+        <span class="muted" style="font-size:14px">${sf.mode === 'overlay'
+          ? `Tick the slips to print — names and details only, using “${esc(g.name)}” for the ${SLIP_LAYOUTS[g.base].name.toLowerCase()} (${slipSizeLabel(g.base)}), ${g.paper === 'slip' ? 'each on its own blank slip' : 'one per ' + SF_PAPERS[g.paper].name + ' sheet'}.`
           : 'Tick the slips to print — full slip layout, 4 per A4 page.'}</span></div>
       <div class="slipmode"><div class="seg" role="group" aria-label="Print on">${[['plain', 'Plain paper'], ['overlay', 'My printed slips']].map(([v, l]) =>
         `<button type="button" data-action="slipMode" data-v="${v}" class="${state.settings.slipFill.mode === v ? 'on' : ''}" aria-pressed="${state.settings.slipFill.mode === v}">${l}</button>`).join('')}</div>
-        ${state.settings.slipFill.mode === 'overlay' ? `<button class="btn sm" data-action="slipSetup">Set up slip layout</button>` : ''}</div>
+        ${sf.mode === 'overlay' ? `<select class="input" id="slipVerSel" aria-label="Layout version">${versionOptionsHTML(sf)}</select>
+          <button class="btn sm" data-action="slipSetup">Set up slip layout</button>` : ''}</div>
       <label class="check" style="margin-bottom:6px"><input type="checkbox" data-set="slipCopies" ${state.settings.slipCopies ? 'checked' : ''}> Also print a copy for each assistant${copies ? ` (${copies})` : ''}</label>
       ${its.length ? `<div class="rows">${its.map(it => {
         const ok = slipReady(it);
@@ -2424,6 +2732,9 @@ function remarkCardHTML(p){
   return `<div class="pcard fixed"><b>${esc(p.title)}</b> <span class="muted">(${p.duration} min.) · Given by the chairman</span></div>`;
 }
 const inputField = (p, f, label, ph = '') => `<label class="field"><span>${label}</span><input class="input" data-ped="${f}" data-pid="${p.id}" value="${esc(p[f])}" placeholder="${esc(ph)}" maxlength="300"></label>`;
+/* Shows which counsel point the older slip will print, live while typing. */
+const counselHintText = p => { const c = counselPoint(p); return c ? `Counsel point on the slip: ${c}` : 'No counsel point found — put it in brackets, e.g. (th leksiyon 10)'; };
+const counselHintHTML = p => `<div class="muted" data-cp="${esc(p.id)}" style="font-size:12px;line-height:1.3">${esc(counselHintText(p))}</div>`;
 const fieldMinutes = p => `<label class="field"><span>Minutes</span><input class="input" type="number" inputmode="numeric" min="0" max="180" data-ped="duration" data-pid="${p.id}" value="${p.duration}"></label>`;
 function partCardHTML(p, sec, num, movable){
   const i = movable.indexOf(p);
@@ -2439,12 +2750,13 @@ function partCardHTML(p, sec, num, movable){
   if (sec === 'treasures'){
     // The talk and Espirituwal nga mga Bahandi have no notes field
     left = `<div class="field"><span>Length</span><div class="fixedval">${p.duration} min.</div></div>`
-      + (['treasures', 'gems'].includes(p.type) ? '' : inputField(p, 'notes', 'Notes / material'));
+      + (['treasures', 'gems'].includes(p.type) ? '' : inputField(p, 'notes', 'Notes / material', p.type === 'reading' ? 'e.g. Isa 1:1-17 (th leksiyon 10)' : ''))
+      + (p.type === 'reading' ? counselHintHTML(p) : '');
   } else if (sec === 'ministry'){
     left = fieldMinutes(p)
       + `<label class="field"><span>Setting, theme &amp; counsel point</span><textarea class="input details" data-ped="theme" data-pid="${p.id}" maxlength="400"
           placeholder="e.g. PAGPAMALAYBALAY. … (lmd leksiyon 7 punto 4)">${esc(p.theme)}</textarea></label>
-         <div class="muted" style="font-size:12px;line-height:1.3">Start with “PAKIGPULONG.” for a talk (no assistant).</div>`;
+         <div class="muted" style="font-size:12px;line-height:1.3">Start with “PAKIGPULONG.” for a talk (no assistant).</div>${counselHintHTML(p)}`;
   } else {
     left = fieldMinutes(p) + inputField(p, 'notes', 'Notes / material');
   }
@@ -2577,6 +2889,7 @@ function onEditorField(t, isChange){
   const f = t.dataset.ped;
   if (f === 'active'){ p.off = !t.checked; if (isChange) renderEditorBody(); return; }
   p[f] = f === 'duration' ? int(t.value, 0, 180, 0) : t.value;
+  if (f === 'theme' || f === 'notes'){ const hint = t.closest('.pcard') && t.closest('.pcard').querySelector('[data-cp]'); if (hint) hint.textContent = counselHintText(p); }
   if (p.section === 'ministry' && (f === 'title' || f === 'theme')) p.type = ministryTypeFor(p);
   if (p.section === 'ministry' && f === 'theme' && isChange){
     // A talk has no householder/assistant: clear any that were set.
@@ -3076,14 +3389,15 @@ const actions = {
   slipPreview: el => {
     const it = findSlip(el.dataset.key); if (!it) return;
     let layer;
-    const sf = state.settings.slipFill, g = slipGeom(sf), photo = sf.mode === 'overlay' ? lsGet(photoKey(g.id)) || '' : '';
+    const sf = state.settings.slipFill, g = slipGeom(sf), photo = sf.mode === 'overlay' ? versionPhoto(slipVersion(sf)) : '';
     const body = sf.mode === 'overlay'
-      ? `<p class="muted sf-tip" style="margin:0 0 10px">${esc(g.name)} (${slipSizeLabel(g.id)}). Only the dark text is printed onto your slip.</p><div class="sf-stage" style="margin:0">${scaledSlipHTML(overlayHTML(fillValues(it), g, {photo, guide:!photo}), g, Math.min(window.innerWidth - 90, 400), window.innerHeight * .6).html}</div>`
+      ? `<p class="muted sf-tip" style="margin:0 0 10px">${esc(g.name)} — ${SLIP_LAYOUTS[g.base].name.toLowerCase()} (${slipSizeLabel(g.base)}). Only the dark text is printed onto your slip.</p><div class="sf-stage" style="margin:0">${scaledSlipHTML(overlayHTML(fillValues(it), g, {photo, guide:!photo}), g, Math.min(window.innerWidth - 90, 400), window.innerHeight * .6).html}</div>`
       : `<div class="slip-preview">${slipHTML(it)}</div>`;
     layer = openLayer(`<div class="modal dialog" role="dialog" aria-modal="true" aria-label="Assignment slip">
       <div class="modal-body">${body}</div>
       <div class="modal-foot"><button class="btn" data-close>Close</button><button class="btn primary" data-action="slipPrint" data-key="${it.key}">${ICON.print}Print</button></div></div>`);
     layer.addEventListener('click', e => { if (e.target.closest('[data-close]') || e.target.closest('[data-action=slipPrint]')) closeLayer(layer); });
+    fitText(layer);
   },
   pubView: el => { state.settings.pubView = el.dataset.v; save(); render(); },
   addPub: () => openPubEditor(null),
@@ -3255,6 +3569,11 @@ function onField(e){
   if (t.id === 'pubCat'){ ui.pubCat = t.value; $('#pubResults').innerHTML = pubResultsHTML(); return; }
   if (t.dataset.slip){ t.checked ? ui.slipOff.delete(t.dataset.slip) : ui.slipOff.add(t.dataset.slip); render(); return; }
   if (t.id === 'pubViewSel'){ ui.pubViewId = t.value; render(); return; }
+  if (t.id === 'slipVerSel'){
+    const sf = state.settings.slipFill;
+    if (sf.versions.some(v => v.id === t.value)){ sf.layout = t.value; state.settings.slipFill = normSlipFill(sf); save(`Layout: ${slipVersion(state.settings.slipFill).name}`); }
+    render(); return;
+  }
   if (t.dataset.filter){ ui.pf[t.dataset.filter] = t.value; render(); return; }
   if (t.dataset.set){
     const k = t.dataset.set, s = state.settings, v = t.value;
