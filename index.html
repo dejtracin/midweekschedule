@@ -156,6 +156,7 @@ select.input{appearance:none;-webkit-appearance:none;padding-right:32px;
 .ss-list{max-height:260px;overflow:auto;margin-top:6px;overscroll-behavior:contain}
 .ss-opt{display:flex;justify-content:flex-start;align-items:baseline;gap:10px;padding:9px 10px;border-radius:5px;cursor:pointer;color:var(--text)}
 .ss-opt .ss-info{font-size:13px;color:var(--muted);white-space:nowrap}
+.ss-opt .ss-info.up{color:var(--warn);font-weight:600}   /* already scheduled in an upcoming week */
 .ss-opt .ss-txt{min-width:0}
 .ss-opt.special .ss-name{color:var(--muted);font-style:italic}
 .ss-opt.act{background:var(--band)}
@@ -1370,23 +1371,48 @@ function assignmentsOf(m){
 }
 const allAssignments = () => sortedMeetings().flatMap(assignmentsOf);
 
+/* One person's assignments, past and scheduled, in date order:
+   last = most recent one already held (before today), next = the first one
+   from today on, latest = the most recent of ALL (may be upcoming).
+   "Upcoming" means today or later, as everywhere else in the app.
+   `list` is a date-sorted list of assignments (allAssignments() or a part). */
+function assignSummary(list, t = todayISO()){
+  const past = list.filter(a => a.date < t), ahead = list.filter(a => a.date >= t);
+  return {past, ahead, last:past.length ? past[past.length - 1].date : '', next:ahead.length ? ahead[0].date : '',
+    latest:list.length ? list[list.length - 1].date : ''};
+}
+/* "Okt 15", with the year when it differs from `refISO`'s year (default:
+   this year), so dates around New Year stay unambiguous. */
+function fmtMDY(iso, refISO){
+  const d = parseISO(iso), r = parseISO(refISO || todayISO());
+  if (!d) return '';
+  return fmtMD(iso) + (r && d.getFullYear() !== r.getFullYear() ? `, ${d.getFullYear()}` : '');
+}
+/* A date with an "upcoming" mark when it has not happened yet. */
+const latestHTML = (iso, t = todayISO(), ref) => iso
+  ? `${esc(ref === 'short' ? fmtShort(iso) : fmtMDY(iso))}${iso >= t ? ' <span class="chip warn" style="font-size:11px;padding:0 6px">upcoming</span>' : ''}` : '';
+
 /* Hall of one assignment: 'SH' for second-hall parts and the second hall
    counselor, otherwise 'MH' (the main hall, where everything else happens). */
 const assignHall = a => a.hall2 ? 'SH' : 'MH';
 
-/* Map "publisherId|type" -> most recent date before `before`,
-   ignoring the meeting being edited. Used for "last done" hints.
+/* Map "publisherId|type" (and "publisherId") -> date of the person's MOST
+   RECENT assignment in every other saved meeting: weeks already held AND
+   weeks already scheduled ahead (the latest date wins), so someone who is
+   already booked for an upcoming week is not offered again as if free.
+   The meeting being edited is left out, so its own names never count.
+   Used for the "last" hints in the meeting editor's publisher picker.
    If `halls` is given it gets the same keys -> the hall of that SAME most
    recent assignment ('MH' or 'SH'; 'MH/SH' if the person had parts in
    both halls on that date). */
-function buildLastMap(before, excludeId, halls){
+function buildLastMap(excludeId, halls){
   const map = {};
   const note = (k, a, h) => {
     if (!map[k] || map[k] < a.date){ map[k] = a.date; if (halls) halls[k] = h; }
     else if (halls && map[k] === a.date && halls[k] && halls[k] !== h) halls[k] = 'MH/SH';
   };
   state.meetings.forEach(m => {
-    if (m.id === excludeId || (before && m.date >= before)) return;
+    if (m.id === excludeId) return;
     assignmentsOf(m).forEach(a => {
       const h = assignHall(a);
       note(a.pid + '|' + a.type, a, h);
@@ -2315,11 +2341,8 @@ function pubResultsHTML(){
   if (!list.length) return `<div class="empty"><h3>No publishers match</h3><p>Clear the search or eligibility filter.</p></div>`;
   const t = todayISO();
   const all = allAssignments();
-  const info = p => {
-    const mine = all.filter(a => a.pid === p.id);
-    const past = mine.filter(a => a.date < t);
-    return {upcoming:mine.filter(a => a.date >= t).length, last:past.length ? past[past.length - 1].date : ''};
-  };
+  // last = most recent assignment, counting weeks already scheduled ahead
+  const info = p => { const s = assignSummary(all.filter(a => a.pid === p.id), t); return {upcoming:s.ahead.length, last:s.latest}; };
   const gender = p => p.gender ? (p.gender === 'M' ? 'Brother' : 'Sister') : '';
   const chips = p => p.categories.length ? p.categories.map(c => `<span class="chip cat">${esc(catName(c))}</span>`).join('') : '<span class="chip warn">No eligibility set</span>';
   const acts = p => `<div class="acts"><button class="btn icon sm ghost" data-action="editPub" data-id="${p.id}" aria-label="Edit ${esc(p.name)}">${ICON.edit}</button>
@@ -2331,7 +2354,7 @@ function pubResultsHTML(){
       <button class="pc-main" data-action="editPub" data-id="${p.id}">
         <div class="pc-name">${esc(p.name)}</div>
         <div class="sub">${gender(p) || '&nbsp;'}</div>
-        <div class="pc-stats"><span><b>${i.upcoming}</b> upcoming</span><span>Last: <b>${i.last ? esc(fmtMD(i.last)) : '—'}</b></span></div>
+        <div class="pc-stats"><span><b>${i.upcoming}</b> upcoming</span><span>Last: <b>${i.last ? latestHTML(i.last, t) : '—'}</b></span></div>
         <div class="cats">${chips(p)}</div>
       </button>${acts(p)}</div>`; }).join('')}</div>`;
   } else if (view === 'table'){
@@ -2340,13 +2363,13 @@ function pubResultsHTML(){
         <td><button class="linkbtn" data-action="editPub" data-id="${p.id}">${esc(p.name)}</button></td>
         <td class="muted">${gender(p)}</td>
         <td class="elig" title="${esc(p.categories.map(catName).join(', '))}">${shortElig(p) ? esc(shortElig(p)) : '<span class="chip warn">None</span>'}</td>
-        <td>${i.upcoming}</td><td>${i.last ? esc(fmtShort(i.last)) : '—'}</td>
+        <td>${i.upcoming}</td><td>${i.last ? latestHTML(i.last, t, 'short') : '—'}</td>
         <td>${acts(p)}</td></tr>`; }).join('')}</tbody></table></div>`;
   } else {
     body = `<div class="rows">${list.map(p => { const i = info(p); return `<div class="row">
       <button class="main" data-action="editPub" data-id="${p.id}" style="background:none;border:0;text-align:left;padding:0;cursor:pointer">
         <div class="title">${esc(p.name)} ${gender(p) ? `<span class="muted" style="font-weight:400">(${gender(p)})</span>` : ''}</div>
-        <div class="sub">${i.upcoming} upcoming · last assignment ${i.last ? esc(fmtShort(i.last)) : 'none recorded'}</div>
+        <div class="sub">${i.upcoming} upcoming · last assignment ${i.last ? latestHTML(i.last, t, 'short') : 'none recorded'}</div>
         <div class="cats">${chips(p)}</div>
       </button>${acts(p)}</div>`; }).join('')}</div>`;
   }
@@ -2391,22 +2414,31 @@ function viewPlanner(){
   </div>`;
 }
 
-/* Per-publisher: last time they handled each assignment type. Based only on saved records. */
+/* Per-publisher: for each assignment type, the last one already held, the
+   next one scheduled, and how many of each; then every assignment on record
+   in date order (held and upcoming). Based only on saved meetings. */
 function historyForPublisher(pid){
   const p = pub(pid); if (!p) return '';
   const t = todayISO();
   const mine = allAssignments().filter(a => a.pid === pid);
   const types = Array.from(new Set([...p.categories, ...mine.map(a => a.type)])).filter(Boolean);
   if (!types.length) return '<p class="muted">No eligibility or assignments recorded.</p>';
+  const all = assignSummary(mine, t);
   const rows = types.map(ty => {
-    const done = mine.filter(a => a.type === ty && a.date < t);
-    const next = mine.find(a => a.type === ty && a.date >= t);
+    const s = assignSummary(mine.filter(a => a.type === ty), t);
     return `<tr><td>${esc(catName(ty))}${p.categories.includes(ty) ? '' : ' <span class="chip warn">not eligible</span>'}</td>
-      <td>${done.length ? esc(fmtShort(done[done.length - 1].date)) : '<span class="muted">Never</span>'}</td>
-      <td>${done.length}</td><td>${next ? esc(fmtShort(next.date)) : '—'}</td></tr>`;
+      <td>${s.latest ? latestHTML(s.latest, t, 'short') : '<span class="muted">Never</span>'}</td>
+      <td>${s.last ? esc(fmtShort(s.last)) : '<span class="muted">—</span>'}</td><td>${s.past.length}</td>
+      <td>${s.next ? esc(fmtShort(s.next)) : '—'}</td><td>${s.ahead.length}</td></tr>`;
   }).join('');
-  return `<div class="scroll-x"><table class="tbl"><thead><tr><th>Assignment type</th><th>Last handled</th><th>Times</th><th>Next</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="muted" style="font-size:13px">Counts come only from meetings saved in this app.</p>`;
+  const timeline = mine.length ? `<h3 style="font-size:16px;margin:22px 0 6px">All assignments on record (${all.past.length} held, ${all.ahead.length} upcoming)</h3>
+    <div class="scroll-x"><table class="tbl"><thead><tr><th>Date</th><th>Assignment</th><th>Hall</th><th></th></tr></thead><tbody>
+    ${mine.slice().reverse().map(a => `<tr><td style="white-space:nowrap">${esc(fmtShort(a.date))}</td><td>${esc(a.label)}</td><td>${assignHall(a) === 'SH' ? 'Second hall' : 'Main hall'}</td>
+      <td>${a.date >= t ? '<span class="chip warn">upcoming</span>' : '<span class="muted">held</span>'}</td></tr>`).join('')}</tbody></table></div>` : '';
+  return `<p class="muted" style="font-size:14px;margin-top:0">Last assignment: <b style="color:var(--text)">${all.latest ? latestHTML(all.latest, t, 'short') : 'none recorded'}</b>${all.ahead.length ? ` · next on ${esc(fmtShort(all.next))}` : ''}</p>
+    <div class="scroll-x"><table class="tbl"><thead><tr><th>Assignment type</th><th>Most recent</th><th>Last held</th><th>Times held</th><th>Next</th><th>Upcoming</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${timeline}
+    <p class="muted" style="font-size:13px">Counts come only from meetings saved in this app. “Most recent” includes assignments already scheduled for upcoming weeks.</p>`;
 }
 
 function fairnessTable(){
@@ -2414,14 +2446,13 @@ function fairnessTable(){
   const t = todayISO(), since = toISO(addDays(new Date(), -91));
   const all = allAssignments();
   const rows = state.publishers.map(p => {
-    const mine = all.filter(a => a.pid === p.id);
-    const past = mine.filter(a => a.date < t);
-    return {p, last:past.length ? past[past.length - 1].date : '', recent:past.filter(a => a.date >= since).length, upcoming:mine.filter(a => a.date >= t).length};
+    const s = assignSummary(all.filter(a => a.pid === p.id), t);
+    return {p, last:s.latest, recent:s.past.filter(a => a.date >= since).length, upcoming:s.ahead.length};
   }).sort((a, b) => (a.last || '').localeCompare(b.last || '') || a.p.name.localeCompare(b.p.name));
-  return `<p class="muted" style="font-size:14px;margin-top:0">Sorted by who has gone longest without an assignment. Select a publisher in the filter above to see their history by type.</p>
+  return `<p class="muted" style="font-size:14px;margin-top:0">Sorted by who has gone longest without an assignment, counting assignments already scheduled for upcoming weeks. Select a publisher in the filter above to see their full history.</p>
   <div class="scroll-x"><table class="tbl"><thead><tr><th>Publisher</th><th>Last assignment</th><th>Last 13 weeks</th><th>Upcoming</th></tr></thead><tbody>
   ${rows.map(r => `<tr><td><button class="btn ghost sm" style="padding:0;min-height:0;font-weight:600" data-action="pfPub" data-id="${r.p.id}">${esc(r.p.name)}</button></td>
-    <td>${r.last ? esc(fmtShort(r.last)) : '<span class="muted">None</span>'}</td><td>${r.recent}</td><td>${r.upcoming}</td></tr>`).join('')}
+    <td>${r.last ? latestHTML(r.last, t, 'short') : '<span class="muted">None</span>'}</td><td>${r.recent}</td><td>${r.upcoming}</td></tr>`).join('')}
   </tbody></table></div>`;
 }
 
@@ -2548,7 +2579,7 @@ function dialog({title, message, buttons}){
 const confirmDanger = (title, message, okLabel) => dialog({title, message, buttons:[{label:'Cancel', value:false}, {label:okLabel, value:true, cls:'danger solid'}]});
 
 /* ---------- Meeting editor ---------- */
-let ed = null; // {draft, orig, isNew, showAll, layer, lastMap, lastHall}
+let ed = null; // {draft, orig, isNew, showAll, layer, lastMap, lastHall}  (lastMap: most recent assignment, past or upcoming)
 
 function newMeetingDraft(date){
   const s = state.settings;
@@ -2577,7 +2608,7 @@ function renderEditorBody(){
   const b = $('#edBody'); if (!b) return;
   const st = b.scrollTop;
   ed.lastHall = {};
-  ed.lastMap = buildLastMap(ed.draft.date, ed.draft.id, ed.lastHall);
+  ed.lastMap = buildLastMap(ed.draft.id, ed.lastHall);
   ssClose();
   b.innerHTML = editorHTML();
   enhanceSearchSelects(b);
@@ -2655,7 +2686,7 @@ function ssOpen(sel, btn, firstChar){
       if (pendingGroup){ html += `<div class="ss-group">${esc(pendingGroup)}</div>`; pendingGroup = null; }
       const i = shown.length; shown.push(it.o);
       html += `<div class="ss-opt${it.o.selected ? ' sel' : ''}${parts.special ? ' special' : ''}" role="option" data-i="${i}" aria-selected="${it.o.selected}">
-        <span class="ss-txt"><span class="ss-name">${esc(parts.name)}</span>${parts.info ? ` <span class="ss-info">- ${esc(parts.info)}</span>` : ''}</span></div>`;
+        <span class="ss-txt"><span class="ss-name">${esc(parts.name)}</span>${parts.info ? ` <span class="ss-info${it.o.dataset.up ? ' up' : ''}">- ${esc(parts.info)}</span>` : ''}</span></div>`;
     });
     list.innerHTML = html || '<div class="ss-empty">No matching name</div>';
     active = Math.max(0, words.length ? 0 : shown.findIndex(o => o.selected));
@@ -2699,14 +2730,17 @@ function pubOptions(selected, cat, brothersOnly, allowNone, allowChair){
   const lm = ed ? ed.lastMap : {}, lh = (ed && ed.lastHall) || {};
   // Living as Christians parts: sisters are never listed
   const list = state.publishers.filter(p => !brothersOnly || p.gender !== 'F' || p.id === selected).sort(byName);
-  // Shown as "Name - Okt 15 | MH": date and hall of the same (most recent) assignment.
-  // No earlier assignment -> "never"; no hall recorded -> the date only.
+  // Shown as "Name - Okt 15 | MH": date and hall of the same (most recent)
+  // assignment, counting weeks already scheduled ahead; those end in
+  // "upcoming" (today or later). The year is added when it differs from the
+  // meeting's. No other assignment -> "never"; no hall recorded -> the date only.
+  const t = todayISO(), ref = ed ? ed.draft.date : t;
   const label = (p, warn) => {
     const k = cat ? p.id + '|' + cat : p.id;
-    const last = lm[k], hall = last ? lh[k] : '';
-    const info = last ? `${fmtMD(last)}${hall ? ` | ${hall}` : ''}` : 'never';
+    const last = lm[k], hall = last ? lh[k] : '', up = last && last >= t;
+    const info = last ? `${fmtMDY(last, ref)}${hall ? ` | ${hall}` : ''}${up ? ' · upcoming' : ''}` : 'never';
     const name = p.name + (warn ? ' (not marked eligible)' : '');
-    return `<option value="${p.id}" data-name="${esc(name)}" data-info="${esc(info)}" ${p.id === selected ? 'selected' : ''}>${esc(name)} - ${esc(info)}</option>`;
+    return `<option value="${p.id}" data-name="${esc(name)}" data-info="${esc(info)}"${up ? ' data-up="1"' : ''} ${p.id === selected ? 'selected' : ''}>${esc(name)} - ${esc(info)}</option>`;
   };
   const elig = cat ? list.filter(p => p.categories.includes(cat)) : list;
   elig.sort((a, b) => (lm[a.id + '|' + cat] || '').localeCompare(lm[b.id + '|' + cat] || '') || a.name.localeCompare(b.name));
