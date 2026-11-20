@@ -949,7 +949,7 @@ function validateData(o){
     // bro: saved choice, or (data from before this setting existed) the built-in default
     categories: Array.isArray(si.categories) ? si.categories.filter(c => c && typeof c.id === 'string' && c.id.trim()).map(c => ({id:str(c.id,40), name:str(c.name,60) || c.id,
       bro:typeof c.bro === 'boolean' ? c.bro : BROTHER_CATS.includes(str(c.id,40))})) : clone(DEFAULT_CATEGORIES),
-    template: Array.isArray(si.template) ? si.template.map(normPart).filter(Boolean) : d.template
+    template: orderedParts(Array.isArray(si.template) ? si.template.map(normPart).filter(Boolean) : d.template)
   };
   // core categories must always exist
   CORE_CATS.forEach(id => { if (!s.categories.some(c => c.id === id)) s.categories.push(clone(DEFAULT_CATEGORIES.find(c => c.id === id))); });
@@ -971,7 +971,7 @@ function validateData(o){
       chairman:str(m.chairman,40), openingPrayer:str(m.openingPrayer,40), closingPrayer:str(m.closingPrayer,40),
       secondHall:!!m.secondHall, hall2Counselor:m.secondHall ? str(m.hall2Counselor,40) : '',
       songs:{opening:songVal(sg.opening), middle:songVal(sg.middle), closing:songVal(sg.closing)},
-      notes:str(m.notes,2000), parts:Array.isArray(m.parts) ? m.parts.map(normPart).filter(Boolean) : []};
+      notes:str(m.notes,2000), parts:orderedParts(Array.isArray(m.parts) ? m.parts.map(normPart).filter(Boolean) : [])};
   });
   // One-time switch of English default wording to Bisaya (only exact default
   // texts are changed; anything you typed yourself is left alone).
@@ -1362,9 +1362,32 @@ const nextMeeting = () => sortedMeetings().find(m => m.date >= todayISO());
 const meetingTime = m => m.time || state.settings.meetingTime;
 const byName = (a, b) => a.name.localeCompare(b.name);
 
-/* Parts sorted by section order, keeping their order inside a section. */
+/* Position anchors inside a section. Most parts keep the order the user
+   gave them (rank 0). In Kristohanong Pagkinabuhi a few parts are anchored by
+   WHAT they are, not by where they happen to sit in the list:
+     rank 1  Pagtuon sa Kongregasyon sa Bibliya (isCBS): always after every
+             other part of the section, however many are added or moved;
+     rank 2  the chairman's closing remarks (Konklusyon): only these follow it.
+   The other two sections have no anchors, so their order is untouched. */
+const ANCHORED_SECTION = 'living';
+const partRank = p => p.section !== ANCHORED_SECTION ? 0 : isCBS(p) ? 1 : isRemarks(p) ? 2 : 0;
+
+/* Parts sorted by section order, then by anchor rank; parts of equal rank
+   keep their relative order (explicit index tie-break, so the sort is stable). */
 function orderedParts(parts){
-  return SECTION_IDS.flatMap(s => parts.filter(p => p.section === s));
+  return SECTION_IDS.flatMap(s => parts.filter(p => p.section === s)
+    .map((p, i) => [p, i])
+    .sort((a, b) => partRank(a[0]) - partRank(b[0]) || a[1] - b[1])
+    .map(x => x[0]));
+}
+/* Add a part to its section, directly above the section's first anchored
+   part (in Kristohanong Pagkinabuhi: above the Bible study), otherwise at the
+   end of the section. Returns a new, fully ordered list. */
+function insertPart(parts, np){
+  const out = parts.slice();
+  const anchor = out.find(p => p.section === np.section && partRank(p) > partRank(np));
+  if (anchor) out.splice(out.indexOf(anchor), 0, np); else out.push(np);
+  return orderedParts(out);
 }
 
 /* Flatten a meeting into individual assignments (one per person per role). */
@@ -2617,7 +2640,9 @@ function newMeetingDraft(date){
 }
 
 function openEditor(meeting, isNew){
-  ed = {draft:clone(meeting), orig:JSON.stringify(meeting), isNew, showAll:false};
+  const draft = clone(meeting);
+  draft.parts = orderedParts(draft.parts);   // Bible study last in Kristohanong Pagkinabuhi
+  ed = {draft, orig:JSON.stringify(draft), isNew, showAll:false};
   ed.layer = openLayer(`<div class="modal full" role="dialog" aria-modal="true" aria-label="${isNew ? 'New meeting' : 'Edit meeting'}">
     <div class="modal-head"><button class="btn ghost" data-action="edCancel">Cancel</button><h2>${isNew ? 'New meeting' : 'Edit meeting'}</h2><button class="btn primary" data-action="edSave">Save</button></div>
     <div class="modal-body" id="edBody"></div></div>`, () => edCancel());
@@ -2629,6 +2654,7 @@ function renderEditorBody(){
   const st = b.scrollTop;
   ed.lastHall = {};
   ed.lastMap = buildLastMap(ed.draft.id, ed.lastHall);
+  ed.draft.parts = orderedParts(ed.draft.parts);   // every structural change re-renders through here
   ssClose();
   b.innerHTML = editorHTML();
   enhanceSearchSelects(b);
@@ -3521,12 +3547,9 @@ const actions = {
     const np = sec === 'ministry'
       ? {id:uid(), section:sec, title:'New part', type:'', format:'', theme:'PAGPAMALAYBALAY. ', assignee:'', assistant:'', duration:4, notes:''}
       : {id:uid(), section:sec, title:'New part', type:'living', format:'', assignee:'', assistant:'', duration:15, notes:''};
-    const inSec = ed.draft.parts.filter(p => p.section === sec);
-    const lastP = inSec[inSec.length - 1];
-    // keep closing remarks last in the Living section
-    if (lastP && isRemarks(lastP) && inSec.length > 1) ed.draft.parts.splice(ed.draft.parts.indexOf(lastP), 0, np);
-    else ed.draft.parts.push(np);
-    ed.draft.parts = orderedParts(ed.draft.parts);
+    // Goes above the Bible study (and the closing remarks) in Kristohanong
+    // Pagkinabuhi; at the end of the section elsewhere.
+    ed.draft.parts = insertPart(ed.draft.parts, np);
     renderEditorBody();
   },
   edMove: el => {
@@ -3552,8 +3575,14 @@ const actions = {
   theme: el => { state.settings.theme = el.dataset.v; applyTheme(); save('Theme saved'); render(); },
   logoPick: () => $('#logoFile').click(),
   logoRemove: () => { state.settings.logoImage = ''; save('Logo removed'); render(); },
-  tplAdd: () => { state.settings.template.push({id:uid(), section:'living', title:'New part', type:'', format:'Pakigpulong', duration:5, assignee:'', assistant:'', notes:''}); save('Part added to template'); render(); },
-  tplMove: el => { const t = state.settings.template, i = +el.dataset.i, j = i + (+el.dataset.dir); if (j < 0 || j >= t.length) return; [t[i], t[j]] = [t[j], t[i]]; state.settings.template = orderedParts(t); save(); $('#tplList').innerHTML = templateHTML(); },
+  tplAdd: () => { state.settings.template = insertPart(state.settings.template, {id:uid(), section:'living', title:'New part', type:'', format:'Pakigpulong', duration:5, assignee:'', assistant:'', notes:''}); save('Part added to template'); render(); },
+  tplMove: el => {
+    const t = state.settings.template.slice(), i = +el.dataset.i, j = i + (+el.dataset.dir); if (j < 0 || j >= t.length) return;
+    [t[i], t[j]] = [t[j], t[i]];
+    const next = orderedParts(t);
+    if (next.every((p, k) => p === state.settings.template[k])) return toast('Pagtuon sa Kongregasyon sa Bibliya stays last in Kristohanong Pagkinabuhi.');
+    state.settings.template = next; save(); $('#tplList').innerHTML = templateHTML();
+  },
   tplDel: async el => { const i = +el.dataset.i; const p = state.settings.template[i]; if (!(await confirmDanger('Remove part from template?', `<p>Remove “${esc(p.title)}” from the default parts? Existing meetings keep it.</p>`, 'Remove'))) return; state.settings.template.splice(i, 1); save('Template updated'); render(); },
   tplReset: async () => { if (!(await confirmDanger('Restore original parts?', '<p>The default part list will be replaced with the app’s original list.</p>', 'Restore'))) return; state.settings.template = defaultTemplate(); save('Template restored'); render(); },
   catAdd: () => {
@@ -3673,8 +3702,10 @@ function onField(e){
     if (f === 'title'){ if (!t.value.trim()) { toast('Part titles can’t be empty.', 'error'); t.value = p.title; return; } p.title = t.value.trim(); }
     else if (f === 'duration') p.duration = int(t.value, 0, 180, 0);
     else p[f] = t.value;
-    if (f === 'section') state.settings.template = orderedParts(state.settings.template);
-    save('Template saved'); if (f === 'section') $('#tplList').innerHTML = templateHTML(); return;
+    // section or type decides where a part may sit (e.g. type 'cbs' = the Bible study, kept last)
+    const reorder = f === 'section' || f === 'type';
+    if (reorder) state.settings.template = orderedParts(state.settings.template);
+    save('Template saved'); if (reorder) $('#tplList').innerHTML = templateHTML(); return;
   }
   if (t.dataset.catbro !== undefined){
     const c = state.settings.categories[+t.dataset.catbro]; if (!c) return;
